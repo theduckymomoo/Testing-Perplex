@@ -1,0 +1,2465 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  SafeAreaView,
+  StatusBar,
+  ScrollView,
+  FlatList,
+  RefreshControl,
+  Alert,
+  ActivityIndicator,
+  Switch,
+  Image,
+  Dimensions,
+  Modal,
+  TextInput,
+  Animated,
+  Pressable,
+} from 'react-native';
+import { useAuth } from '../Context/AuthContext';
+import { useNavigation } from '@react-navigation/native';
+
+const { width, height } = Dimensions.get('window');
+const cardWidth = (width - 48) / 2; // Better spacing for two items per row
+
+export default function Dashboard() {
+  const { user, userProfile, signOut, supabase } = useAuth();
+  const navigation = useNavigation();
+  const [appliances, setAppliances] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [pulseAnim] = useState(new Animated.Value(1));
+  const [newAppliance, setNewAppliance] = useState({
+    name: '',
+    type: '',
+    room: '',
+    normal_usage: '',
+  });
+
+  const [selectedDevice, setSelectedDevice] = useState(null);
+  const [showControlModal, setShowControlModal] = useState(false);
+  const [timerModalVisible, setTimerModalVisible] = useState(false);
+  const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
+  const [automationModalVisible, setAutomationModalVisible] = useState(false);
+  const [timerDuration, setTimerDuration] = useState({ hours: 0, minutes: 0 });
+  const [scheduleTime, setScheduleTime] = useState({ hour: 12, minute: 0, enabled: false, repeat: [] });
+  const [deviceTimers, setDeviceTimers] = useState({});
+  const [deviceSchedules, setDeviceSchedules] = useState({});
+  const [bulkControlMode, setBulkControlMode] = useState(false);
+  const [selectedDevices, setSelectedDevices] = useState([]);
+  const [automationRules, setAutomationRules] = useState({});
+
+  // Timer management
+  useEffect(() => {
+    const timers = {};
+    Object.keys(deviceTimers).forEach(deviceId => {
+      const timer = deviceTimers[deviceId];
+      if (timer && timer.endTime > Date.now()) {
+        const remaining = timer.endTime - Date.now();
+        timers[deviceId] = setTimeout(() => {
+          handleTimerComplete(deviceId);
+        }, remaining);
+      }
+    });
+
+    return () => {
+      Object.values(timers).forEach(timer => clearTimeout(timer));
+    };
+  }, [deviceTimers]);
+
+  const handleTimerComplete = async (deviceId) => {
+    await toggleAppliance(deviceId, 'on'); // Turn off when timer completes
+    setDeviceTimers(prev => {
+      const updated = { ...prev };
+      delete updated[deviceId];
+      return updated;
+    });
+    Alert.alert('Timer Complete', 'Device has been automatically turned off.');
+  };
+
+  const setDeviceTimer = (deviceId, hours, minutes) => {
+    const durationMs = (hours * 60 + minutes) * 60 * 1000;
+    const endTime = Date.now() + durationMs;
+    
+    setDeviceTimers(prev => ({
+      ...prev,
+      [deviceId]: {
+        endTime,
+        duration: durationMs,
+        startTime: Date.now()
+      }
+    }));
+    
+    Alert.alert(
+      'Timer Set',
+      `Device will turn off in ${hours}h ${minutes}m`,
+      [{ text: 'OK' }]
+    );
+  };
+
+  const cancelTimer = (deviceId) => {
+    setDeviceTimers(prev => {
+      const updated = { ...prev };
+      delete updated[deviceId];
+      return updated;
+    });
+    Alert.alert('Timer Cancelled', 'Device timer has been removed.');
+  };
+
+  const getTimerStatus = (deviceId) => {
+    const timer = deviceTimers[deviceId];
+    if (!timer || timer.endTime <= Date.now()) return null;
+    
+    const remaining = timer.endTime - Date.now();
+    const hours = Math.floor(remaining / (1000 * 60 * 60));
+    const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
+    
+    return { hours, minutes, remaining };
+  };
+
+  // Bulk control functions
+  const toggleBulkMode = () => {
+    setBulkControlMode(!bulkControlMode);
+    setSelectedDevices([]);
+  };
+
+  const toggleDeviceSelection = (deviceId) => {
+    setSelectedDevices(prev => 
+      prev.includes(deviceId) 
+        ? prev.filter(id => id !== deviceId)
+        : [...prev, deviceId]
+    );
+  };
+
+  const bulkToggleDevices = async (action) => {
+    for (const deviceId of selectedDevices) {
+      const device = appliances.find(app => app.id === deviceId);
+      if (device) {
+        const newStatus = action === 'on' ? 'on' : 'off';
+        await toggleAppliance(deviceId, device.status === 'on' ? 'on' : 'off');
+      }
+    }
+    setSelectedDevices([]);
+    setBulkControlMode(false);
+  };
+
+  // State for fetching data
+  const [stats, setStats] = useState({
+    totalUsage: 0,
+    monthlyCost: 0,
+    activeDevices: 0,
+    usageBreakdown: [],
+  });
+
+  // Fetch appliances from Supabase
+  const fetchAppliances = useCallback(async () => {
+    setLoading(true);
+    setRefreshing(true);
+    try {
+      const { data, error } = await supabase
+        .from('appliances')
+        .select('*')
+        .eq('user_id', user.id);
+      if (error) throw error;
+      if (data) {
+        setAppliances(data);
+        calculateStats(data);
+      }
+    } catch (error) {
+      console.error('Error fetching appliances:', error);
+      Alert.alert('Error', 'Could not load appliances. Please try again.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user, supabase]);
+
+  // Handle toggling appliance status
+  const toggleAppliance = useCallback(async (id, currentStatus) => {
+    const newStatus = currentStatus === 'on' ? 'off' : 'on';
+    try {
+      setAppliances(prevAppliances => prevAppliances.map(app =>
+        app.id === id ? { ...app, status: newStatus } : app
+      ));
+
+      const { error } = await supabase
+        .from('appliances')
+        .update({ status: newStatus })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      // Recalculate stats after update
+      const updatedAppliances = appliances.map(app =>
+        app.id === id ? { ...app, status: newStatus } : app
+      );
+      calculateStats(updatedAppliances);
+    } catch (error) {
+      console.error('Error toggling appliance status:', error);
+      Alert.alert('Error', 'Could not update appliance status. Please try again.');
+      // Revert state on error
+      setAppliances(prevAppliances => prevAppliances.map(app =>
+        app.id === id ? { ...app, status: currentStatus } : app
+      ));
+    }
+  }, [appliances, supabase]);
+
+  // Calculate dashboard stats
+  const calculateStats = (data) => {
+    const totalUsage = data
+      .filter(app => app.status === 'on')
+      .reduce((sum, app) => sum + parseFloat(app.normal_usage), 0);
+    const monthlyCost = (totalUsage / 1000) * 24 * 30 * 2.50; // 2.50 is cost per kWh
+    const activeDevices = data.filter(app => app.status === 'on').length;
+
+    const breakdown = data.reduce((acc, app) => {
+      const existing = acc.find(item => item.type === app.type);
+      if (existing) {
+        existing.usage += parseFloat(app.normal_usage);
+      } else {
+        acc.push({ type: app.type, usage: parseFloat(app.normal_usage) });
+      }
+      return acc;
+    }, []);
+
+    setStats({
+      totalUsage: totalUsage.toFixed(2),
+      monthlyCost: monthlyCost.toFixed(2),
+      activeDevices,
+      usageBreakdown: breakdown,
+    });
+  };
+
+  // Helper functions for UI
+  const getApplianceIcon = (type) => {
+    const icons = {
+      'Lights': '💡',
+      'AC': '❄️',
+      'TV': '📺',
+      'Heater': '♨️',
+      'Fan': '💨',
+      'Outlet': '🔌',
+      'Security': '🚨',
+      'Speaker': '🔊',
+      'Other': '⚙️'
+    };
+    return icons[type] || icons['Other'];
+  };
+
+  const getEnergyLevel = (usage) => {
+    if (usage < 50) return { label: 'Low Usage', color: '#10b981' };
+    if (usage < 200) return { label: 'Moderate Usage', color: '#f59e0b' };
+    return { label: 'High Usage', color: '#ef4444' };
+  };
+
+  // Handle new appliance submission
+  const handleAddAppliance = async () => {
+    if (!newAppliance.name || !newAppliance.type || !newAppliance.room || !newAppliance.normal_usage) {
+      Alert.alert('Error', 'Please fill in all fields.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('appliances')
+        .insert([{
+          ...newAppliance,
+          user_id: user.id,
+          normal_usage: parseFloat(newAppliance.normal_usage),
+          status: 'off',
+        }])
+        .select();
+
+      if (error) throw error;
+      if (data) {
+        setAppliances(prev => [...prev, ...data]);
+        setNewAppliance({ name: '', type: '', room: '', normal_usage: '' });
+        setShowAddModal(false);
+        Alert.alert('Success', 'Appliance added successfully!');
+      }
+    } catch (error) {
+      console.error('Error adding appliance:', error);
+      Alert.alert('Error', 'Could not add appliance. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle pulse animation for SOS button
+  useEffect(() => {
+    const startPulse = () => {
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.1,
+          duration: 500,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 500,
+          useNativeDriver: true,
+        }),
+      ]).start(() => startPulse());
+    };
+    startPulse();
+  }, [pulseAnim]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchAppliances();
+  }, [fetchAppliances]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchAppliances();
+  }, [fetchAppliances]);
+
+  const renderDashboard = () => (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
+      }
+    >
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.welcomeText}>Hello {userProfile?.first_name || user.email.split('@')[0]} 👋</Text>
+          <Text style={styles.subtitle}>Welcome to your smart home</Text>
+        </View>
+        <TouchableOpacity style={styles.profileButton} onPress={signOut}>
+          <Text style={styles.profileButtonText}>Sign Out</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.statsContainer}>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>Total Usage</Text>
+          <Text style={styles.statValue}>{stats.totalUsage} W</Text>
+          <Text style={styles.statDescription}>Active devices</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>Monthly Cost</Text>
+          <Text style={styles.statValue}>R{stats.monthlyCost}</Text>
+          <Text style={styles.statDescription}>Estimated bill</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>Active Devices</Text>
+          <Text style={styles.statValue}>{stats.activeDevices}</Text>
+          <Text style={styles.statDescription}>Currently on</Text>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Your Devices</Text>
+        {loading ? (
+          <ActivityIndicator size="large" color="#10b981" style={{ marginTop: 20 }} />
+        ) : (
+          <View style={styles.deviceList}>
+            {appliances.length > 0 ? (
+              appliances.slice(0, 4).map((item) => (
+                <View key={item.id} style={styles.deviceItem}>
+                  <View style={styles.deviceIconBackground}>
+                    <Text style={styles.deviceIcon}>{getApplianceIcon(item.type)}</Text>
+                  </View>
+                  <View style={styles.deviceInfo}>
+                    <Text style={styles.deviceInfoName}>{item.name}</Text>
+                    <Text style={styles.deviceInfoRoom}>{item.room}</Text>
+                  </View>
+                  <Switch
+                    value={item.status === 'on'}
+                    onValueChange={() => toggleAppliance(item.id, item.status)}
+                    trackColor={{ false: 'rgba(255, 255, 255, 0.2)', true: '#10b981' }}
+                    thumbColor="#ffffff"
+                  />
+                </View>
+              ))
+            ) : (
+              <View style={styles.emptyStateContainer}>
+                <Text style={styles.emptyStateText}>No devices added yet. Add your first device to get started.</Text>
+                <TouchableOpacity onPress={() => setShowAddModal(true)} style={styles.emptyStateButton}>
+                  <Text style={styles.emptyStateButtonText}>Add Device</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Energy Efficiency</Text>
+        <View style={styles.efficiencyCard}>
+          <View style={styles.efficiencyScoreCircle}>
+            <Text style={styles.efficiencyScoreNumber}>85</Text>
+            <Text style={styles.efficiencyScorePercent}>%</Text>
+          </View>
+          <View style={styles.efficiencyScoreInfo}>
+            <Text style={styles.efficiencyScoreTitle}>Home Efficiency Score</Text>
+            <Text style={styles.efficiencyScoreDescription}>
+              Your home is more efficient than 85% of similar homes.
+            </Text>
+          </View>
+        </View>
+        <View style={styles.efficiencyBreakdown}>
+          <View style={styles.efficiencyFactor}>
+            <Text>💡</Text>
+            <Text style={styles.efficiencyFactorLabel}>Lighting:</Text>
+            <Text style={styles.efficiencyFactorValue}>Optimized</Text>
+          </View>
+          <View style={styles.efficiencyFactor}>
+            <Text>🌡️</Text>
+            <Text style={styles.efficiencyFactorLabel}>Climate:</Text>
+            <Text style={styles.efficiencyFactorValue}>Good</Text>
+          </View>
+          <View style={styles.efficiencyFactor}>
+            <Text>🔌</Text>
+            <Text style={styles.efficiencyFactorLabel}>Standby:</Text>
+            <Text style={styles.efficiencyFactorValue}>Needs Attention</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Emergency Alert</Text>
+        <TouchableOpacity style={styles.sosButton} activeOpacity={0.8} onPress={() => Alert.alert('SOS Alert', 'Emergency alert initiated!')}>
+          <Animated.View style={[styles.sosPulse, { transform: [{ scale: pulseAnim }] }]} />
+          <Text style={styles.sosText}>SOS</Text>
+        </TouchableOpacity>
+        <Text style={styles.sosDescription}>
+          Press and hold to send an alert to your emergency contacts.
+        </Text>
+      </View>
+
+      {/* Add Device Modal */}
+      <Modal
+        visible={showAddModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowAddModal(false)}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowAddModal(false)} activeOpacity={0.7}>
+              <Text style={styles.modalCancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Add New Device</Text>
+            <TouchableOpacity onPress={handleAddAppliance} activeOpacity={0.7}>
+              <Text style={styles.modalSave}>Save</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.modalContent}>
+            <TextInput
+              style={styles.input}
+              placeholder="Device Name (e.g., Living Room Lamp)"
+              placeholderTextColor="#6b7280"
+              value={newAppliance.name}
+              onChangeText={text => setNewAppliance(prev => ({ ...prev, name: text }))}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Device Type (e.g., Lights, TV, AC)"
+              placeholderTextColor="#6b7280"
+              value={newAppliance.type}
+              onChangeText={text => setNewAppliance(prev => ({ ...prev, type: text }))}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Room (e.g., Living Room)"
+              placeholderTextColor="#6b7280"
+              value={newAppliance.room}
+              onChangeText={text => setNewAppliance(prev => ({ ...prev, room: text }))}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Normal Usage (Watts)"
+              placeholderTextColor="#6b7280"
+              keyboardType="numeric"
+              value={newAppliance.normal_usage}
+              onChangeText={text => setNewAppliance(prev => ({ ...prev, normal_usage: text }))}
+            />
+          </View>
+        </SafeAreaView>
+      </Modal>
+    </ScrollView>
+  );
+
+  const renderAnalysis = () => (
+    <ScrollView showsVerticalScrollIndicator={false}>
+      <View style={styles.header}>
+        <Text style={styles.pageTitle}>Energy Analysis</Text>
+        <Text style={styles.subtitle}>Detailed insights and projections</Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>💰 Estimated Costs</Text>
+        <View style={styles.costCard}>
+          <Text style={styles.costTitle}>Monthly Projection</Text>
+          <Text style={styles.costValue}>R{stats.monthlyCost}</Text>
+          <View style={styles.costBreakdown}>
+            <Text style={styles.costDetail}>Annual: R{(stats.monthlyCost * 12).toFixed(2)}</Text>
+            <Text style={styles.costDetail}>Daily: R{((stats.monthlyCost / 30) || 0).toFixed(2)}</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>📈 Usage Breakdown</Text>
+        <View style={styles.breakdownCard}>
+          {stats.usageBreakdown.map((item, index) => (
+            <View key={index} style={styles.breakdownItem}>
+              <Text style={styles.breakdownLabel}>{getApplianceIcon(item.type)} {item.type}</Text>
+              <Text style={styles.breakdownValue}>{item.usage.toFixed(2)} W</Text>
+              <View style={styles.breakdownBarContainer}>
+                <View
+                  style={[
+                    styles.breakdownBar,
+                    {
+                      width: `${(item.usage / stats.totalUsage) * 100}%`,
+                      backgroundColor: ['#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#8b5cf6'][index % 5],
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>⚡ Peak Usage</Text>
+        <View style={styles.peakUsageCard}>
+          <Text style={styles.peakUsageText}>
+            Your peak usage is typically between <Text style={styles.peakUsageHighlight}>6 PM and 9 PM</Text> on weekdays.
+          </Text>
+          <Text style={styles.peakUsageSubtext}>
+            Consider running heavy-duty appliances before or after these hours to save costs.
+          </Text>
+        </View>
+      </View>
+
+      {/* Placeholder for Historical Data Chart */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>📊 Historical Data</Text>
+        <View style={styles.chartPlaceholder}>
+          <Text style={styles.chartPlaceholderText}>[Placeholder for Bar Chart visualizing monthly usage]</Text>
+        </View>
+      </View>
+
+    </ScrollView>
+  );
+
+  // New renderControls function with new logic
+  const renderControls = () => (
+    <ScrollView showsVerticalScrollIndicator={false}>
+      <View style={styles.controlsHeader}>
+        <View>
+          <Text style={styles.pageTitle}>Device Controls</Text>
+          <Text style={styles.controlsSubtitle}>
+            {appliances.filter(app => app.status === 'on').length} of {appliances.length} devices active
+          </Text>
+        </View>
+        <View style={styles.headerActions}>
+          <TouchableOpacity 
+            style={[styles.bulkButton, bulkControlMode && styles.bulkButtonActive]}
+            onPress={toggleBulkMode}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.bulkButtonText, bulkControlMode && styles.bulkButtonTextActive]}>
+              {bulkControlMode ? '✓ Bulk' : 'Select'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.addButton}
+            onPress={() => setShowAddModal(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.addButtonText}>+ Add</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Bulk Control Panel */}
+      {bulkControlMode && (
+        <View style={styles.bulkControlPanel}>
+          <Text style={styles.bulkControlTitle}>
+            {selectedDevices.length} device{selectedDevices.length !== 1 ? 's' : ''} selected
+          </Text>
+          <View style={styles.bulkActions}>
+            <TouchableOpacity 
+              style={[styles.bulkActionButton, styles.bulkActionOn]}
+              onPress={() => bulkToggleDevices('on')}
+              disabled={selectedDevices.length === 0}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.bulkActionText}>Turn On All</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.bulkActionButton, styles.bulkActionOff]}
+              onPress={() => bulkToggleDevices('off')}
+              disabled={selectedDevices.length === 0}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.bulkActionText}>Turn Off All</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Quick Actions */}
+      <View style={styles.quickActionsSection}>
+        <Text style={styles.sectionTitle}>⚡ Quick Actions</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickActionsScroll}>
+          <TouchableOpacity style={styles.quickActionCard} activeOpacity={0.8}>
+            <Text style={styles.quickActionIcon}>🏠</Text>
+            <Text style={styles.quickActionTitle}>All Lights</Text>
+            <Text style={styles.quickActionSubtitle}>Living areas</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickActionCard} activeOpacity={0.8}>
+            <Text style={styles.quickActionIcon}>❄️</Text>
+            <Text style={styles.quickActionTitle}>Climate</Text>
+            <Text style={styles.quickActionSubtitle}>AC & Heating</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickActionCard} activeOpacity={0.8}>
+            <Text style={styles.quickActionIcon}>📺</Text>
+            <Text style={styles.quickActionTitle}>Entertainment</Text>
+            <Text style={styles.quickActionSubtitle}>TV & Sound</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickActionCard} activeOpacity={0.8}>
+            <Text style={styles.quickActionIcon}>🌙</Text>
+            <Text style={styles.quickActionTitle}>Night Mode</Text>
+            <Text style={styles.quickActionSubtitle}>Bedtime routine</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+
+      {appliances.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyIcon}>🏠</Text>
+          <Text style={styles.emptyTitle}>No Devices Added</Text>
+          <Text style={styles.emptySubtitle}>Add your first smart home device to get started</Text>
+          <TouchableOpacity 
+            style={styles.emptyButton}
+            onPress={() => setShowAddModal(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.emptyButtonText}>Add First Device</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.deviceGrid}>
+          {appliances.map((item) => {
+            const energyLevel = getEnergyLevel(item.normal_usage);
+            const monthlyCost = Math.round((item.normal_usage / 1000) * 24 * 30 * 2.50);
+            const timerStatus = getTimerStatus(item.id);
+            const isSelected = selectedDevices.includes(item.id);
+
+            return (
+              <TouchableOpacity 
+                key={item.id} 
+                style={[
+                  styles.deviceCard,
+                  bulkControlMode && isSelected && styles.deviceCardSelected
+                ]} 
+                activeOpacity={0.9}
+                onPress={() => {
+                  if (bulkControlMode) {
+                    toggleDeviceSelection(item.id);
+                  } else {
+                    setSelectedDevice(item);
+                    setShowControlModal(true);
+                  }
+                }}
+              >
+                {/* Selection indicator for bulk mode */}
+                {bulkControlMode && (
+                  <View style={[styles.selectionIndicator, isSelected && styles.selectionIndicatorActive]}>
+                    <Text style={styles.selectionCheckmark}>{isSelected ? '✓' : ''}</Text>
+                  </View>
+                )}
+
+                <View style={styles.deviceHeader}>
+                  <Text style={styles.deviceCardIcon}>{getApplianceIcon(item.type)}</Text>
+                  <Switch
+                    value={item.status === 'on'}
+                    onValueChange={() => !bulkControlMode && toggleAppliance(item.id, item.status)}
+                    trackColor={{ false: 'rgba(255, 255, 255, 0.2)', true: '#10b981' }}
+                    thumbColor="#ffffff"
+                    disabled={bulkControlMode}
+                  />
+                </View>
+                
+                <Text style={styles.deviceCardName}>{item.name}</Text>
+                <Text style={styles.deviceCardRoom}>{item.room}</Text>
+                
+                {/* Timer Status */}
+                {timerStatus && (
+                  <View style={styles.timerStatus}>
+                    <Text style={styles.timerStatusText}>
+                      ⏰ {timerStatus.hours}h {timerStatus.minutes}m left
+                    </Text>
+                  </View>
+                )}
+                
+                <View style={styles.deviceCardStats}>
+                  <Text style={styles.deviceCardUsage}>{item.normal_usage}W</Text>
+                  <Text style={styles.deviceCardCost}>R{monthlyCost}/mo</Text>
+                </View>
+                
+                <View style={[styles.deviceCardBadge, { backgroundColor: energyLevel.color }]}>
+                  <Text style={styles.deviceCardBadgeText}>{energyLevel.label}</Text>
+                </View>
+
+                {/* Quick Actions */}
+                <View style={styles.deviceQuickActions}>
+                  <TouchableOpacity 
+                    style={styles.deviceQuickAction}
+                    onPress={() => {
+                      setSelectedDevice(item);
+                      setTimerModalVisible(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.deviceQuickActionIcon}>⏰</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.deviceQuickAction}
+                    onPress={() => {
+                      setSelectedDevice(item);
+                      setScheduleModalVisible(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.deviceQuickActionIcon}>📅</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.deviceQuickAction}
+                    onPress={() => {
+                      setSelectedDevice(item);
+                      setShowControlModal(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.deviceQuickActionIcon}>⚙️</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Device Control Modal */}
+      <Modal
+        visible={showControlModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowControlModal(false)}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowControlModal(false)} activeOpacity={0.7}>
+              <Text style={styles.modalCancel}>Close</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>{selectedDevice?.name}</Text>
+            <View style={styles.modalHeaderSpace} />
+          </View>
+
+          <ScrollView style={styles.modalContent}>
+            {selectedDevice && (
+              <View style={styles.deviceControlContent}>
+                {/* Device Status Card */}
+                <View style={styles.deviceStatusCard}>
+                  <View style={styles.deviceStatusHeader}>
+                    <Text style={styles.deviceStatusIcon}>{getApplianceIcon(selectedDevice.type)}</Text>
+                    <View style={styles.deviceStatusInfo}>
+                      <Text style={styles.deviceStatusName}>{selectedDevice.name}</Text>
+                      <Text style={styles.deviceStatusRoom}>{selectedDevice.room}</Text>
+                      <Text style={[
+                        styles.deviceStatusState,
+                        { color: selectedDevice.status === 'on' ? '#10b981' : '#6b7280' }
+                      ]}>
+                        {selectedDevice.status === 'on' ? 'Currently ON' : 'Currently OFF'}
+                      </Text>
+                    </View>
+                    <Switch
+                      value={selectedDevice.status === 'on'}
+                      onValueChange={() => toggleAppliance(selectedDevice.id, selectedDevice.status)}
+                      trackColor={{ false: 'rgba(255, 255, 255, 0.2)', true: '#10b981' }}
+                      thumbColor="#ffffff"
+                    />
+                  </View>
+                  
+                  <View style={styles.deviceStatusStats}>
+                    <View style={styles.deviceStatusStat}>
+                      <Text style={styles.deviceStatusStatLabel}>Power Usage</Text>
+                      <Text style={styles.deviceStatusStatValue}>{selectedDevice.normal_usage}W</Text>
+                    </View>
+                    <View style={styles.deviceStatusStat}>
+                      <Text style={styles.deviceStatusStatLabel}>Monthly Cost</Text>
+                      <Text style={styles.deviceStatusStatValue}>
+                        R{Math.round((selectedDevice.normal_usage / 1000) * 24 * 30 * 2.50)}
+                      </Text>
+                    </View>
+                    <View style={styles.deviceStatusStat}>
+                      <Text style={styles.deviceStatusStatLabel}>Efficiency</Text>
+                      <Text style={styles.deviceStatusStatValue}>
+                        {getEnergyLevel(selectedDevice.normal_usage).label}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Timer Section */}
+                <View style={styles.controlSection}>
+                  <Text style={styles.controlSectionTitle}>⏰ Timer Control</Text>
+                  {getTimerStatus(selectedDevice.id) ? (
+                    <View style={styles.activeTimerCard}>
+                      <View style={styles.activeTimerInfo}>
+                        <Text style={styles.activeTimerText}>
+                          Timer Active: {getTimerStatus(selectedDevice.id).hours}h {getTimerStatus(selectedDevice.id).minutes}m remaining
+                        </Text>
+                        <Text style={styles.activeTimerSubtext}>Device will turn off automatically</Text>
+                      </View>
+                      <TouchableOpacity 
+                        style={styles.cancelTimerButton}
+                        onPress={() => cancelTimer(selectedDevice.id)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.cancelTimerText}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={styles.timerPresets}>
+                      <TouchableOpacity 
+                        style={styles.timerPreset}
+                        onPress={() => setDeviceTimer(selectedDevice.id, 0, 30)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.timerPresetText}>30min</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={styles.timerPreset}
+                        onPress={() => setDeviceTimer(selectedDevice.id, 1, 0)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.timerPresetText}>1hr</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={styles.timerPreset}
+                        onPress={() => setDeviceTimer(selectedDevice.id, 2, 0)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.timerPresetText}>2hrs</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={styles.timerPreset}
+                        onPress={() => setTimerModalVisible(true)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.timerPresetText}>Custom</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+
+                {/* Schedule Section */}
+                <View style={styles.controlSection}>
+                  <Text style={styles.controlSectionTitle}>📅 Schedule</Text>
+                  <TouchableOpacity 
+                    style={styles.scheduleButton}
+                    onPress={() => setScheduleModalVisible(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.scheduleButtonIcon}>📅</Text>
+                    <View style={styles.scheduleButtonContent}>
+                      <Text style={styles.scheduleButtonTitle}>Set Schedule</Text>
+                      <Text style={styles.scheduleButtonSubtitle}>Automate on/off times</Text>
+                    </View>
+                    <Text style={styles.scheduleButtonArrow}>›</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Smart Features */}
+                <View style={styles.controlSection}>
+                  <Text style={styles.controlSectionTitle}>🤖 Smart Features</Text>
+                  <View style={styles.smartFeatures}>
+                    <TouchableOpacity style={styles.smartFeature} activeOpacity={0.8}>
+                      <Text style={styles.smartFeatureIcon}>🌡️</Text>
+                      <View style={styles.smartFeatureContent}>
+                        <Text style={styles.smartFeatureTitle}>Temperature Control</Text>
+                        <Text style={styles.smartFeatureSubtitle}>Auto-adjust based on weather</Text>
+                      </View>
+                      <Switch
+                        value={false}
+                        trackColor={{ false: 'rgba(255, 255, 255, 0.2)', true: '#10b981' }}
+                        thumbColor="#ffffff"
+                      />
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity style={styles.smartFeature} activeOpacity={0.8}>
+                      <Text style={styles.smartFeatureIcon}>👤</Text>
+                      <View style={styles.smartFeatureContent}>
+                        <Text style={styles.smartFeatureTitle}>Presence Detection</Text>
+                        <Text style={styles.smartFeatureSubtitle}>Turn off when nobody's home</Text>
+                      </View>
+                      <Switch
+                        value={false}
+                        trackColor={{ false: 'rgba(255, 255, 255, 0.2)', true: '#10b981' }}
+                        thumbColor="#ffffff"
+                      />
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity style={styles.smartFeature} activeOpacity={0.8}>
+                      <Text style={styles.smartFeatureIcon}>💰</Text>
+                      <View style={styles.smartFeatureContent}>
+                        <Text style={styles.smartFeatureTitle}>Energy Saver Mode</Text>
+                        <Text style={styles.smartFeatureSubtitle}>Optimize for lowest cost</Text>
+                      </View>
+                      <Switch
+                        value={false}
+                        trackColor={{ false: 'rgba(255, 255, 255, 0.2)', true: '#10b981' }}
+                        thumbColor="#ffffff"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Usage Statistics */}
+                <View style={styles.controlSection}>
+                  <Text style={styles.controlSectionTitle}>📊 Usage Statistics</Text>
+                  <View style={styles.usageStats}>
+                    <View style={styles.usageStat}>
+                      <Text style={styles.usageStatLabel}>Today</Text>
+                      <Text style={styles.usageStatValue}>6.2 kWh</Text>
+                      <Text style={styles.usageStatChange}>+12%</Text>
+                    </View>
+                    <View style={styles.usageStat}>
+                      <Text style={styles.usageStatLabel}>This Week</Text>
+                      <Text style={styles.usageStatValue}>42.8 kWh</Text>
+                      <Text style={styles.usageStatChange}>-3%</Text>
+                    </View>
+                    <View style={styles.usageStat}>
+                      <Text style={styles.usageStatLabel}>This Month</Text>
+                      <Text style={styles.usageStatValue}>186 kWh</Text>
+                      <Text style={styles.usageStatChange}>+8%</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Timer Modal */}
+      <Modal
+        visible={timerModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setTimerModalVisible(false)}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setTimerModalVisible(false)} activeOpacity={0.7}>
+              <Text style={styles.modalCancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Set Timer</Text>
+            <TouchableOpacity 
+              onPress={() => {
+                setDeviceTimer(selectedDevice?.id, timerDuration.hours, timerDuration.minutes);
+                setTimerModalVisible(false);
+                setTimerDuration({ hours: 0, minutes: 0 });
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalSave}>Set</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.timerModalContent}>
+            <Text style={styles.timerModalTitle}>
+              Turn off "{selectedDevice?.name}" after:
+            </Text>
+            
+            <View style={styles.timerPickers}>
+              <View style={styles.timerPickerSection}>
+                <Text style={styles.timerPickerLabel}>Hours</Text>
+                <View style={styles.timerPickerContainer}>
+                  <TouchableOpacity 
+                    style={styles.timerPickerButton}
+                    onPress={() => setTimerDuration(prev => ({ 
+                      ...prev, 
+                      hours: Math.max(0, prev.hours - 1) 
+                    }))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.timerPickerButtonText}>-</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.timerPickerValue}>{timerDuration.hours}</Text>
+                  <TouchableOpacity 
+                    style={styles.timerPickerButton}
+                    onPress={() => setTimerDuration(prev => ({ 
+                      ...prev, 
+                      hours: Math.min(23, prev.hours + 1) 
+                    }))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.timerPickerButtonText}>+</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.timerPickerSection}>
+                <Text style={styles.timerPickerLabel}>Minutes</Text>
+                <View style={styles.timerPickerContainer}>
+                  <TouchableOpacity 
+                    style={styles.timerPickerButton}
+                    onPress={() => setTimerDuration(prev => ({ 
+                      ...prev, 
+                      minutes: Math.max(0, prev.minutes - 15) 
+                    }))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.timerPickerButtonText}>-</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.timerPickerValue}>{timerDuration.minutes}</Text>
+                  <TouchableOpacity 
+                    style={styles.timerPickerButton}
+                    onPress={() => setTimerDuration(prev => ({ 
+                      ...prev, 
+                      minutes: Math.min(59, prev.minutes + 15) 
+                    }))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.timerPickerButtonText}>+</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.timerPresetButtons}>
+              <TouchableOpacity 
+                style={styles.timerPresetButton}
+                onPress={() => setTimerDuration({ hours: 0, minutes: 15 })}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.timerPresetButtonText}>15 min</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.timerPresetButton}
+                onPress={() => setTimerDuration({ hours: 0, minutes: 30 })}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.timerPresetButtonText}>30 min</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.timerPresetButton}
+                onPress={() => setTimerDuration({ hours: 1, minutes: 0 })}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.timerPresetButtonText}>1 hour</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.timerPresetButton}
+                onPress={() => setTimerDuration({ hours: 2, minutes: 0 })}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.timerPresetButtonText}>2 hours</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
+    </ScrollView>
+  );
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'dashboard':
+        return renderDashboard();
+      case 'analysis':
+        return renderAnalysis();
+      case 'controls':
+        return renderControls();
+      default:
+        return renderDashboard();
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" backgroundColor="#18181b" />
+      {renderContent()}
+
+      <View style={styles.tabBar}>
+        <Pressable
+          style={[styles.tabItem, activeTab === 'dashboard' && styles.activeTabItem]}
+          onPress={() => setActiveTab('dashboard')}
+        >
+          <Text style={styles.tabIcon}>🏠</Text>
+          <Text style={styles.tabText}>Dashboard</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.tabItem, activeTab === 'controls' && styles.activeTabItem]}
+          onPress={() => setActiveTab('controls')}
+        >
+          <Text style={styles.tabIcon}>⚙️</Text>
+          <Text style={styles.tabText}>Controls</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.tabItem, activeTab === 'analysis' && styles.activeTabItem]}
+          onPress={() => setActiveTab('analysis')}
+        >
+          <Text style={styles.tabIcon}>📊</Text>
+          <Text style={styles.tabText}>Analysis</Text>
+        </Pressable>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#18181b',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    paddingTop: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#3f3f46',
+  },
+  welcomeText: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#e4e4e7',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#a1a1aa',
+    marginTop: 4,
+  },
+  profileButton: {
+    backgroundColor: '#27272a',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  profileButtonText: {
+    color: '#a1a1aa',
+    fontWeight: '600',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 16,
+  },
+  statCard: {
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 16,
+    flex: 1,
+    marginHorizontal: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  statValue: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#e4e4e7',
+  },
+  statDescription: {
+    fontSize: 10,
+    color: '#a1a1aa',
+  },
+  section: {
+    padding: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#3f3f46',
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#e4e4e7',
+    marginBottom: 12,
+  },
+  deviceList: {
+    gap: 12,
+  },
+  deviceItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#27272a',
+    padding: 16,
+    borderRadius: 12,
+  },
+  deviceIconBackground: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#3f3f46',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+  },
+  deviceIcon: {
+    fontSize: 24,
+  },
+  deviceInfo: {
+    flex: 1,
+  },
+  deviceInfoName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#e4e4e7',
+  },
+  deviceInfoRoom: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 2,
+  },
+  emptyStateContainer: {
+    alignItems: 'center',
+    marginTop: 40,
+  },
+  emptyStateText: {
+    color: '#a1a1aa',
+    textAlign: 'center',
+    fontSize: 16,
+    marginBottom: 12,
+  },
+  emptyStateButton: {
+    backgroundColor: '#10b981',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  emptyStateButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  costCard: {
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 20,
+  },
+  costTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#a1a1aa',
+  },
+  costValue: {
+    fontSize: 36,
+    fontWeight: '700',
+    color: '#e4e4e7',
+    marginTop: 4,
+  },
+  costBreakdown: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#3f3f46',
+    paddingTop: 12,
+  },
+  costDetail: {
+    fontSize: 14,
+    color: '#a1a1aa',
+  },
+  breakdownCard: {
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 20,
+    gap: 16,
+  },
+  breakdownItem: {
+    gap: 8,
+  },
+  breakdownLabel: {
+    fontSize: 16,
+    color: '#e4e4e7',
+    fontWeight: '500',
+  },
+  breakdownValue: {
+    fontSize: 14,
+    color: '#a1a1aa',
+  },
+  breakdownBarContainer: {
+    height: 8,
+    backgroundColor: '#3f3f46',
+    borderRadius: 4,
+  },
+  breakdownBar: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  peakUsageCard: {
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 20,
+  },
+  peakUsageText: {
+    fontSize: 16,
+    color: '#e4e4e7',
+    lineHeight: 24,
+  },
+  peakUsageHighlight: {
+    color: '#10b981',
+    fontWeight: '600',
+  },
+  peakUsageSubtext: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 8,
+  },
+  chartPlaceholder: {
+    height: 200,
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chartPlaceholderText: {
+    color: '#a1a1aa',
+  },
+  tabBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: '#1f1f21',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#3f3f46',
+    paddingBottom: 2,
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  tabIcon: {
+    fontSize: 24,
+    color: '#a1a1aa',
+  },
+  tabText: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 4,
+  },
+  activeTabItem: {
+    borderTopColor: '#10b981',
+    borderTopWidth: 2,
+    marginTop: -2,
+  },
+  sosButton: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  sosPulse: {
+    position: 'absolute',
+    width: '100%',
+    height: '100%',
+    borderRadius: 60,
+    backgroundColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  sosText: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#ef4444',
+    zIndex: 1,
+  },
+  sosDescription: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  efficiencyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 20,
+    marginBottom: 24,
+  },
+  efficiencyScoreCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 20,
+    borderWidth: 3,
+    borderColor: '#10b981',
+  },
+  efficiencyScoreNumber: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#10b981',
+  },
+  efficiencyScorePercent: {
+    fontSize: 12,
+    color: '#10b981',
+    fontWeight: '600',
+  },
+  efficiencyScoreInfo: {
+    flex: 1,
+  },
+  efficiencyScoreTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginBottom: 6,
+  },
+  efficiencyScoreDescription: {
+    fontSize: 13,
+    color: '#a1a1aa',
+    lineHeight: 18,
+  },
+  efficiencyBreakdown: {
+    gap: 16,
+  },
+  efficiencyFactor: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  efficiencyFactorLabel: {
+    flex: 1,
+    fontSize: 16,
+    color: '#e4e4e7',
+    marginLeft: 8,
+  },
+  efficiencyFactorValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#10b981',
+  },
+  // New Styles for Controls Tab
+  controlsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+  },
+  pageTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#e4e4e7',
+  },
+  controlsSubtitle: {
+    fontSize: 14,
+    color: '#a1a1aa',
+    marginTop: 4,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bulkButton: {
+    backgroundColor: '#27272a',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginRight: 8,
+  },
+  bulkButtonActive: {
+    backgroundColor: '#10b981',
+  },
+  bulkButtonText: {
+    color: '#a1a1aa',
+    fontWeight: '600',
+  },
+  bulkButtonTextActive: {
+    color: '#fff',
+  },
+  addButton: {
+    backgroundColor: '#3b82f6',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  addButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  bulkControlPanel: {
+    backgroundColor: '#3f3f46',
+    padding: 16,
+    marginHorizontal: 16,
+    borderRadius: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  bulkControlTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  bulkActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  bulkActionButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  bulkActionOn: {
+    backgroundColor: '#10b981',
+  },
+  bulkActionOff: {
+    backgroundColor: '#ef4444',
+  },
+  bulkActionText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  quickActionsSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  quickActionsScroll: {
+    marginTop: 12,
+  },
+  quickActionCard: {
+    backgroundColor: '#27272a',
+    padding: 16,
+    borderRadius: 12,
+    width: 120,
+    marginRight: 12,
+  },
+  quickActionIcon: {
+    fontSize: 28,
+    marginBottom: 8,
+  },
+  quickActionTitle: {
+    color: '#e4e4e7',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  quickActionSubtitle: {
+    color: '#a1a1aa',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  emptyState: {
+    alignItems: 'center',
+    padding: 20,
+    marginTop: 40,
+  },
+  emptyIcon: {
+    fontSize: 64,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#e4e4e7',
+    marginTop: 16,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#a1a1aa',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  emptyButton: {
+    backgroundColor: '#10b981',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 24,
+  },
+  emptyButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  deviceGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    padding: 16,
+    gap: 12,
+  },
+  deviceCard: {
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 16,
+    width: cardWidth,
+    position: 'relative',
+    height: 200,
+    justifyContent: 'space-between',
+  },
+  deviceCardSelected: {
+    borderWidth: 2,
+    borderColor: '#10b981',
+  },
+  selectionIndicator: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#a1a1aa',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionIndicatorActive: {
+    backgroundColor: '#10b981',
+    borderColor: '#10b981',
+  },
+  selectionCheckmark: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  deviceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  deviceCardIcon: {
+    fontSize: 24,
+  },
+  deviceCardName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#e4e4e7',
+  },
+  deviceCardRoom: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 4,
+  },
+  timerStatus: {
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    borderRadius: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    alignSelf: 'flex-start',
+    marginTop: 8,
+  },
+  timerStatusText: {
+    fontSize: 12,
+    color: '#10b981',
+    fontWeight: '600',
+  },
+  deviceCardStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  deviceCardUsage: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#a1a1aa',
+  },
+  deviceCardCost: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#a1a1aa',
+  },
+  deviceCardBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+    marginTop: 8,
+  },
+  deviceCardBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  deviceQuickActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  deviceQuickAction: {
+    backgroundColor: '#3f3f46',
+    borderRadius: 8,
+    padding: 8,
+    flex: 1,
+    marginHorizontal: 2,
+    alignItems: 'center',
+  },
+  deviceQuickActionIcon: {
+    fontSize: 20,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#1f1f21',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#3f3f46',
+  },
+  modalCancel: {
+    color: '#a1a1aa',
+    fontSize: 16,
+  },
+  modalSave: {
+    color: '#10b981',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalTitle: {
+    color: '#e4e4e7',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  modalHeaderSpace: {
+    width: 60,
+  },
+  modalContent: {
+    flex: 1,
+    padding: 16,
+  },
+  deviceControlContent: {
+    paddingBottom: 40,
+  },
+  deviceStatusCard: {
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 20,
+  },
+  deviceStatusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  deviceStatusIcon: {
+    fontSize: 48,
+  },
+  deviceStatusInfo: {
+    flex: 1,
+    marginLeft: 16,
+  },
+  deviceStatusName: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#e4e4e7',
+  },
+  deviceStatusRoom: {
+    fontSize: 14,
+    color: '#a1a1aa',
+  },
+  deviceStatusState: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  deviceStatusStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#3f3f46',
+    paddingTop: 16,
+  },
+  deviceStatusStat: {
+    alignItems: 'center',
+  },
+  deviceStatusStatLabel: {
+    fontSize: 12,
+    color: '#a1a1aa',
+  },
+  deviceStatusStatValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#e4e4e7',
+    marginTop: 4,
+  },
+  controlSection: {
+    marginTop: 24,
+  },
+  controlSectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#e4e4e7',
+    marginBottom: 12,
+  },
+  activeTimerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    borderRadius: 12,
+    padding: 16,
+  },
+  activeTimerInfo: {
+    flex: 1,
+  },
+  activeTimerText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#10b981',
+  },
+  activeTimerSubtext: {
+    fontSize: 12,
+    color: 'rgba(16, 185, 129, 0.8)',
+    marginTop: 4,
+  },
+  cancelTimerButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  cancelTimerText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  timerPresets: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  timerPreset: {
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  timerPresetText: {
+    color: '#e4e4e7',
+    fontWeight: '600',
+  },
+  scheduleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 16,
+  },
+  scheduleButtonIcon: {
+    fontSize: 24,
+    marginRight: 16,
+  },
+  scheduleButtonContent: {
+    flex: 1,
+  },
+  scheduleButtonTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#e4e4e7',
+  },
+  scheduleButtonSubtitle: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 2,
+  },
+  scheduleButtonArrow: {
+    fontSize: 24,
+    color: '#a1a1aa',
+  },
+  smartFeatures: {
+    gap: 16,
+  },
+  smartFeature: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    padding: 16,
+  },
+  smartFeatureIcon: {
+    fontSize: 24,
+    marginRight: 16,
+  },
+  smartFeatureContent: {
+    flex: 1,
+  },
+  smartFeatureTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#e4e4e7',
+  },
+  smartFeatureSubtitle: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 2,
+  },
+  usageStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  usageStat: {
+    flex: 1,
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    marginHorizontal: 4,
+  },
+  usageStatLabel: {
+    fontSize: 12,
+    color: '#a1a1aa',
+  },
+  usageStatValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#e4e4e7',
+    marginTop: 4,
+  },
+  usageStatChange: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#10b981',
+    marginTop: 4,
+  },
+  timerModalContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  timerModalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#e4e4e7',
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  timerPickers: {
+    flexDirection: 'row',
+    gap: 24,
+    marginBottom: 24,
+  },
+  timerPickerSection: {
+    alignItems: 'center',
+  },
+  timerPickerLabel: {
+    fontSize: 14,
+    color: '#a1a1aa',
+    marginBottom: 8,
+  },
+  timerPickerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#27272a',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+  },
+  timerPickerButton: {
+    backgroundColor: '#3f3f46',
+    borderRadius: 8,
+    padding: 8,
+  },
+  timerPickerButtonText: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  timerPickerValue: {
+    fontSize: 48,
+    fontWeight: '700',
+    color: '#fff',
+    width: 60,
+    textAlign: 'center',
+  },
+  timerPresetButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  timerPresetButton: {
+    backgroundColor: '#3f3f46',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  timerPresetButtonText: {
+    color: '#e4e4e7',
+    fontWeight: '600',
+  },
+});
+// Additional styles for enhanced device controls
+const enhancedControlsStyles = StyleSheet.create({
+  // Enhanced Header
+  controlsSubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  bulkButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  bulkButtonActive: {
+    backgroundColor: '#10b981',
+    borderColor: '#10b981',
+  },
+  bulkButtonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  bulkButtonTextActive: {
+    color: '#ffffff',
+  },
+
+  // Bulk Control Panel
+  bulkControlPanel: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    marginHorizontal: 24,
+    marginBottom: 24,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#10b981',
+  },
+  bulkControlTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#10b981',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  bulkActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  bulkActionButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  bulkActionOn: {
+    backgroundColor: '#10b981',
+  },
+  bulkActionOff: {
+    backgroundColor: '#ef4444',
+  },
+  bulkActionText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+
+  // Quick Actions
+  quickActionsSection: {
+    paddingHorizontal: 24,
+    marginBottom: 24,
+  },
+  quickActionsScroll: {
+    marginTop: 12,
+  },
+  quickActionCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 16,
+    marginRight: 12,
+    alignItems: 'center',
+    minWidth: 100,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  quickActionIcon: {
+    fontSize: 28,
+    marginBottom: 8,
+  },
+  quickActionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginBottom: 2,
+  },
+  quickActionSubtitle: {
+    fontSize: 10,
+    color: '#a1a1aa',
+    textAlign: 'center',
+  },
+
+  // Enhanced Device Cards
+  deviceCardSelected: {
+    borderColor: '#10b981',
+    borderWidth: 2,
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+  },
+  selectionIndicator: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+  },
+  selectionIndicatorActive: {
+    backgroundColor: '#10b981',
+  },
+  selectionCheckmark: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  timerStatus: {
+    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 8,
+  },
+  timerStatusText: {
+    fontSize: 10,
+    color: '#f97316',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  deviceQuickActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  deviceQuickAction: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deviceQuickActionIcon: {
+    fontSize: 16,
+  },
+
+  // Device Control Modal
+  modalHeaderSpace: {
+    width: 60,
+  },
+  deviceControlContent: {
+    padding: 24,
+  },
+  deviceStatusCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  deviceStatusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  deviceStatusIcon: {
+    fontSize: 40,
+    marginRight: 16,
+  },
+  deviceStatusInfo: {
+    flex: 1,
+  },
+  deviceStatusName: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  deviceStatusRoom: {
+    fontSize: 14,
+    color: '#a1a1aa',
+    marginTop: 2,
+  },
+  deviceStatusState: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  deviceStatusStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  deviceStatusStat: {
+    alignItems: 'center',
+  },
+  deviceStatusStatLabel: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginBottom: 4,
+  },
+  deviceStatusStatValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+
+  // Control Sections
+  controlSection: {
+    marginBottom: 32,
+  },
+  controlSectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginBottom: 16,
+  },
+
+  // Timer Controls
+  activeTimerCard: {
+    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#f97316',
+  },
+  activeTimerInfo: {
+    flex: 1,
+  },
+  activeTimerText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#f97316',
+  },
+  activeTimerSubtext: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 2,
+  },
+  cancelTimerButton: {
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  cancelTimerText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  timerPresets: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  timerPreset: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  timerPresetText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+
+  // Schedule Button
+  scheduleButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  scheduleButtonIcon: {
+    fontSize: 24,
+    marginRight: 16,
+  },
+  scheduleButtonContent: {
+    flex: 1,
+  },
+  scheduleButtonTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  scheduleButtonSubtitle: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 2,
+  },
+  scheduleButtonArrow: {
+    fontSize: 20,
+    color: '#a1a1aa',
+  },
+
+  // Smart Features
+  smartFeatures: {
+    gap: 16,
+  },
+  smartFeature: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  smartFeatureIcon: {
+    fontSize: 24,
+    marginRight: 16,
+  },
+  smartFeatureContent: {
+    flex: 1,
+  },
+  smartFeatureTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  smartFeatureSubtitle: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginTop: 2,
+  },
+
+  // Usage Statistics
+  usageStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  usageStat: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  usageStatLabel: {
+    fontSize: 12,
+    color: '#a1a1aa',
+    marginBottom: 4,
+  },
+  usageStatValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 4,
+  },
+  usageStatChange: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#10b981',
+  },
+
+  // Timer Modal
+  timerModalContent: {
+    flex: 1,
+    padding: 24,
+    alignItems: 'center',
+  },
+  timerModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
+    textAlign: 'center',
+    marginBottom: 40,
+  },
+  timerPickers: {
+    flexDirection: 'row',
+    gap: 40,
+    marginBottom: 40,
+  },
+  timerPickerSection: {
+    alignItems: 'center',
+  },
+  timerPickerLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginBottom: 16,
+  },
+  timerPickerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 20,
+  },
+  timerPickerButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#10b981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timerPickerButtonText: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  timerPickerValue: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#ffffff',
+    minWidth: 60,
+    textAlign: 'center',
+  },
+  timerPresetButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    justifyContent: 'center',
+  },
+  timerPresetButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  timerPresetButtonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+});
+
+// Merge with existing styles
+Object.assign(styles, enhancedControlsStyles);
