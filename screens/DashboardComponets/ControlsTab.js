@@ -920,26 +920,158 @@ export default function ControlsTab() {
   };
 
   // Enhanced device card with ML predictions
-  const renderDeviceCard = ({ item }) => {
-    const energyInsight = getEnergyInsight(item);
-    const isToggling = togglingDevices.has(item.id);
-    const isConnected = connectionStatus[item.id] !== 'error' && item.isOnline !== false;
-    const isFavorite = favorites.includes(item.id);
-    const currentPower = item.current_power || item.normal_usage;
-    const diagnostics = deviceDiagnostics[item.id];
+  const renderDeviceCard = ({ item, index }) => {
+    // Validate required properties
+    if (!item || !item.id || !item.name) {
+      return (
+        <View style={styles.errorCard}>
+          <Text style={styles.errorText}>Invalid device data</Text>
+        </View>
+      );
+    }
 
-    // Get ML prediction for this device
-    const allPredictions = mlService.getPredictions([item], 1);
-    const prediction = allPredictions.success ? 
-      allPredictions.predictions.find(p => p.deviceId === item.id) : 
-      { success: false }
-    const hasPrediction = prediction.success && prediction.confidence > 0.6;
+    try {
+      const energyInsight = getEnergyInsight(item);
+      const isToggling = togglingDevices.has(item.id);
+      const isConnected = connectionStatus[item.id] !== 'error' && item.isOnline !== false;
+      const isFavorite = favorites.includes(item.id);
+      const currentPower = item.current_power || item.normal_usage || 0;
+      const diagnostics = deviceDiagnostics[item.id];
 
-    if (viewMode === 'list') {
+      // Get ML prediction for this device
+      const allPredictions = mlService.getPredictions([item], 1);
+      const prediction = allPredictions.success ? 
+        allPredictions.predictions.find(p => p.deviceId === item.id) : 
+        { success: false }
+      const hasPrediction = prediction.success && prediction.confidence > 0.6;
+
+      if (viewMode === 'list') {
+        return (
+          <TouchableOpacity 
+            style={[
+              styles.deviceListItem, 
+              !isConnected && styles.deviceOffline
+            ]}
+            onPress={() => toggleAppliance(item.id, item.status)}
+            activeOpacity={0.7}
+            disabled={isToggling}
+            accessible={true}
+            accessibilityLabel={`${item.name} in ${item.room}, ${item.status === 'on' ? 'currently on' : 'currently off'}, ${currentPower} watts`}
+            accessibilityHint="Double tap to toggle device power"
+            accessibilityRole="switch"
+            accessibilityState={{ checked: item.status === 'on', disabled: isToggling }}
+          >
+            <View style={styles.deviceListContent}>
+              <View style={styles.deviceListLeft}>
+                <View style={styles.deviceListIcon}>
+                  <MaterialIcons 
+                    name={getApplianceIcon(item.type)} 
+                    size={32} 
+                    color={item.status === 'on' ? '#10b981' : '#a1a1aa'} 
+                  />
+                </View>
+                <View style={styles.deviceListInfo}>
+                  <Text style={styles.deviceListName}>{item.name}</Text>
+                  <Text style={styles.deviceListRoom}>{item.room}</Text>
+                  <Text style={styles.deviceListUsage}>{currentPower}W • {item.status} {!isConnected && '• Offline'}</Text>
+                  
+                  {/* ML Prediction Badge */}
+                  {hasPrediction && item.status === 'off' && prediction.prediction.willBeActive && (
+                    <View style={styles.mlPredictionBadge}>
+                      <MaterialIcons name="lightbulb" size={10} color="#8b5cf6" />
+                      <Text style={styles.mlPredictionText}>
+                        AI: Turn on soon ({prediction.prediction.probability}%)
+                      </Text>
+                    </View>
+                  )}
+
+                  {diagnostics && (
+                    <View style={styles.diagnosticsRow}>
+                      <MaterialIcons name="wifi" size={10} color="#6b7280" />
+                      <Text style={styles.deviceListDiagnostics}>
+                        {diagnostics.wifiStrength}dBm • 
+                      </Text>
+                      <MaterialIcons name="thermostat" size={10} color="#6b7280" />
+                      <Text style={styles.deviceListDiagnostics}>
+                        {Math.round(diagnostics.temperature)}°C
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+              
+              <View style={styles.deviceListRight}>
+                <TouchableOpacity 
+                  onPress={(e) => toggleFavorite(item.id, e)}
+                  style={styles.favoriteButton}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessible={true}
+                  accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                  accessibilityRole="button"
+                >
+                  <MaterialIcons 
+                    name={isFavorite ? "star" : "star-border"} 
+                    size={20} 
+                    color={isFavorite ? "#f59e0b" : "#a1a1aa"} 
+                  />
+                </TouchableOpacity>
+                
+                {isToggling ? (
+                  <ActivityIndicator size="small" color="#10b981" />
+                ) : (
+                  <View style={[
+                    styles.statusIndicator,
+                    item.status === 'on' ? styles.statusOn : styles.statusOff,
+                    !isConnected && styles.statusError
+                  ]} accessible={true} accessibilityLabel={!isConnected ? 'Connection error' : `Status: ${item.status}`}>
+                    <Text style={styles.statusText}>
+                      {!isConnected ? '!' : item.status === 'on' ? 'ON' : 'OFF'}
+                    </Text>
+                  </View>
+                )}
+                
+                <TouchableOpacity 
+                  onPress={() => openEditModal(item)}
+                  style={styles.menuButton}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessible={true}
+                  accessibilityLabel="Edit device settings"
+                  accessibilityRole="button"
+                >
+                  <MaterialIcons name="more-vert" size={20} color="#a1a1aa" />
+                </TouchableOpacity>
+              </View>
+            </View>
+            
+            {/* Additional action buttons */}
+            <View style={styles.deviceActions}>
+              <TouchableOpacity 
+                style={styles.smallButton}
+                onPress={() => getDeviceDiagnostics(item.id)}
+              >
+                <MaterialIcons name="build" size={14} color="#a1a1aa" style={styles.smallButtonIcon} />
+                <Text style={styles.smallButtonText}>Diagnostics</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.smallButton}
+                onPress={() => viewEnergyHistory(item.id)}
+              >
+                <MaterialIcons name="show-chart" size={14} color="#a1a1aa" style={styles.smallButtonIcon} />
+                <Text style={styles.smallButtonText}>Energy History</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Smart Automation */}
+            {renderSmartAutomation(item.id)}
+          </TouchableOpacity>
+        );
+      }
+
+      // Grid View
       return (
         <TouchableOpacity 
           style={[
-            styles.deviceListItem, 
+            styles.deviceCard,
             !isConnected && styles.deviceOffline
           ]}
           onPress={() => toggleAppliance(item.id, item.status)}
@@ -951,209 +1083,95 @@ export default function ControlsTab() {
           accessibilityRole="switch"
           accessibilityState={{ checked: item.status === 'on', disabled: isToggling }}
         >
-          <View style={styles.deviceListContent}>
-            <View style={styles.deviceListLeft}>
-              <View style={styles.deviceListIcon}>
-                <MaterialIcons 
-                  name={getApplianceIcon(item.type)} 
-                  size={32} 
-                  color={item.status === 'on' ? '#10b981' : '#a1a1aa'} 
-                />
-              </View>
-              <View style={styles.deviceListInfo}>
-                <Text style={styles.deviceListName}>{item.name}</Text>
-                <Text style={styles.deviceListRoom}>{item.room}</Text>
-                <Text style={styles.deviceListUsage}>{currentPower}W • {item.status} {!isConnected && '• Offline'}</Text>
-                
-                {/* ML Prediction Badge */}
-                {hasPrediction && item.status === 'off' && prediction.prediction.willBeActive && (
-                  <View style={styles.mlPredictionBadge}>
-                    <MaterialIcons name="lightbulb" size={10} color="#8b5cf6" />
-                    <Text style={styles.mlPredictionText}>
-                      AI: Turn on soon ({prediction.prediction.probability}%)
-                    </Text>
-                  </View>
-                )}
-
-                {diagnostics && (
-                  <View style={styles.diagnosticsRow}>
-                    <MaterialIcons name="wifi" size={10} color="#6b7280" />
-                    <Text style={styles.deviceListDiagnostics}>
-                      {diagnostics.wifiStrength}dBm • 
-                    </Text>
-                    <MaterialIcons name="thermostat" size={10} color="#6b7280" />
-                    <Text style={styles.deviceListDiagnostics}>
-                      {Math.round(diagnostics.temperature)}°C
-                    </Text>
-                  </View>
-                )}
-              </View>
+          <View style={styles.deviceHeader}>
+            <View style={styles.deviceCardIcon}>
+              <MaterialIcons 
+                name={getApplianceIcon(item.type)} 
+                size={28} 
+                color={item.status === 'on' ? '#10b981' : '#a1a1aa'} 
+              />
             </View>
             
-            <View style={styles.deviceListRight}>
-              <TouchableOpacity 
-                onPress={(e) => toggleFavorite(item.id, e)}
-                style={styles.favoriteButton}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                accessible={true}
-                accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-                accessibilityRole="button"
-              >
-                <MaterialIcons 
-                  name={isFavorite ? "star" : "star-border"} 
-                  size={20} 
-                  color={isFavorite ? "#f59e0b" : "#a1a1aa"} 
-                />
-              </TouchableOpacity>
-              
-              {isToggling ? (
-                <ActivityIndicator size="small" color="#10b981" />
-              ) : (
-                <View style={[
-                  styles.statusIndicator,
-                  item.status === 'on' ? styles.statusOn : styles.statusOff,
-                  !isConnected && styles.statusError
-                ]} accessible={true} accessibilityLabel={!isConnected ? 'Connection error' : `Status: ${item.status}`}>
-                  <Text style={styles.statusText}>
-                    {!isConnected ? '!' : item.status === 'on' ? 'ON' : 'OFF'}
-                  </Text>
+            {/* Favorite button moved to middle */}
+            <TouchableOpacity 
+              onPress={(e) => toggleFavorite(item.id, e)}
+              style={styles.favoriteButton}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessible={true}
+              accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+              accessibilityRole="button"
+            >
+              <MaterialIcons 
+                name={isFavorite ? "star" : "star-border"} 
+                size={18} 
+                color={isFavorite ? "#f59e0b" : "#a1a1aa"} 
+              />
+            </TouchableOpacity>
+            
+            <View style={styles.deviceHeaderRight}>
+              {!isConnected && (
+                <View style={styles.offlineIndicator} accessible={true} accessibilityLabel="Connection error">
+                  <MaterialIcons name="error-outline" size={12} color="#ffffff" />
                 </View>
               )}
-              
-              <TouchableOpacity 
-                onPress={() => openEditModal(item)}
-                style={styles.menuButton}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                accessible={true}
-                accessibilityLabel="Edit device settings"
-                accessibilityRole="button"
-              >
-                <MaterialIcons name="more-vert" size={20} color="#a1a1aa" />
-              </TouchableOpacity>
             </View>
           </View>
           
-          {/* Additional action buttons */}
-          <View style={styles.deviceActions}>
-            <TouchableOpacity 
-              style={styles.smallButton}
-              onPress={() => getDeviceDiagnostics(item.id)}
-            >
-              <MaterialIcons name="build" size={14} color="#a1a1aa" style={styles.smallButtonIcon} />
-              <Text style={styles.smallButtonText}>Diagnostics</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.smallButton}
-              onPress={() => viewEnergyHistory(item.id)}
-            >
-              <MaterialIcons name="show-chart" size={14} color="#a1a1aa" style={styles.smallButtonIcon} />
-              <Text style={styles.smallButtonText}>Energy History</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Smart Automation */}
-          {renderSmartAutomation(item.id)}
-        </TouchableOpacity>
-      );
-    }
-
-    // Grid View
-    return (
-      <TouchableOpacity 
-        style={[
-          styles.deviceCard,
-          !isConnected && styles.deviceOffline
-        ]}
-        onPress={() => toggleAppliance(item.id, item.status)}
-        activeOpacity={0.7}
-        disabled={isToggling}
-        accessible={true}
-        accessibilityLabel={`${item.name} in ${item.room}, ${item.status === 'on' ? 'currently on' : 'currently off'}, ${currentPower} watts`}
-        accessibilityHint="Double tap to toggle device power"
-        accessibilityRole="switch"
-        accessibilityState={{ checked: item.status === 'on', disabled: isToggling }}
-      >
-        <View style={styles.deviceHeader}>
-          <View style={styles.deviceCardIcon}>
-            <MaterialIcons 
-              name={getApplianceIcon(item.type)} 
-              size={28} 
-              color={item.status === 'on' ? '#10b981' : '#a1a1aa'} 
-            />
-          </View>
+          <Text style={styles.deviceCardName}>{item.name}</Text>
+          <Text style={styles.deviceCardRoom}>{item.room}</Text>
           
-          {/* Favorite button moved to middle */}
-          <TouchableOpacity 
-            onPress={(e) => toggleFavorite(item.id, e)}
-            style={styles.favoriteButton}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            accessible={true}
-            accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-            accessibilityRole="button"
-          >
-            <MaterialIcons 
-              name={isFavorite ? "star" : "star-border"} 
-              size={18} 
-              color={isFavorite ? "#f59e0b" : "#a1a1aa"} 
-            />
-          </TouchableOpacity>
-          
-          <View style={styles.deviceHeaderRight}>
-            {!isConnected && (
-              <View style={styles.offlineIndicator} accessible={true} accessibilityLabel="Connection error">
-                <MaterialIcons name="error-outline" size={12} color="#ffffff" />
-              </View>
-            )}
-          </View>
-        </View>
-        
-        <Text style={styles.deviceCardName}>{item.name}</Text>
-        <Text style={styles.deviceCardRoom}>{item.room}</Text>
-        
-        {/* ML Prediction for grid view */}
-        {hasPrediction && (
-          <View style={styles.mlPredictionChip}>
-            <MaterialIcons name="psychology" size={10} color="#8b5cf6" />
-            <Text style={styles.mlPredictionChipText}>
-              {prediction.prediction.probability}%
-            </Text>
-          </View>
-        )}
-        
-        <View style={styles.deviceCardFooter}>
-          {isToggling ? (
-            <ActivityIndicator size="small" color="#10b981" />
-          ) : (
-            <View style={[
-              styles.statusIndicator,
-              item.status === 'on' ? styles.statusOn : styles.statusOff
-            ]} accessible={true} accessibilityLabel={`Status: ${item.status}`}>
-              <Text style={styles.statusText}>
-                {item.status === 'on' ? 'ON' : 'OFF'}
+          {/* ML Prediction for grid view */}
+          {hasPrediction && (
+            <View style={styles.mlPredictionChip}>
+              <MaterialIcons name="psychology" size={10} color="#8b5cf6" />
+              <Text style={styles.mlPredictionChipText}>
+                {prediction.prediction.probability}%
               </Text>
             </View>
           )}
           
-          <Text style={styles.deviceCardUsage}>{currentPower}W</Text>
-        </View>
-        
-        {/* Energy insight badge */}
-        <View style={[styles.energyBadge, { backgroundColor: energyInsight.color }]}>
-          <Text style={styles.energyBadgeText}>{energyInsight.level}</Text>
-        </View>
-        
-        <TouchableOpacity 
-          onPress={() => openEditModal(item)}
-          style={styles.cardMenuButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessible={true}
-          accessibilityLabel="Edit device settings"
-          accessibilityRole="button"
-        >
-          <MaterialIcons name="more-vert" size={18} color="#a1a1aa" />
+          <View style={styles.deviceCardFooter}>
+            {isToggling ? (
+              <ActivityIndicator size="small" color="#10b981" />
+            ) : (
+              <View style={[
+                styles.statusIndicator,
+                item.status === 'on' ? styles.statusOn : styles.statusOff
+              ]} accessible={true} accessibilityLabel={`Status: ${item.status}`}>
+                <Text style={styles.statusText}>
+                  {item.status === 'on' ? 'ON' : 'OFF'}
+                </Text>
+              </View>
+            )}
+            
+            <Text style={styles.deviceCardUsage}>{currentPower}W</Text>
+          </View>
+          
+          {/* Energy insight badge */}
+          <View style={[styles.energyBadge, { backgroundColor: energyInsight.color }]}>
+            <Text style={styles.energyBadgeText}>{energyInsight.level}</Text>
+          </View>
+          
+          <TouchableOpacity 
+            onPress={() => openEditModal(item)}
+            style={styles.cardMenuButton}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessible={true}
+            accessibilityLabel="Edit device settings"
+            accessibilityRole="button"
+          >
+            <MaterialIcons name="more-vert" size={18} color="#a1a1aa" />
+          </TouchableOpacity>
         </TouchableOpacity>
-      </TouchableOpacity>
-    );
+      );
+    } catch (error) {
+      console.error('Error rendering device card:', error);
+      return (
+        <View style={styles.errorCard}>
+          <Text style={styles.errorText}>Error loading device</Text>
+        </View>
+      );
+    }
   };
 
   // Filter Modal
@@ -1656,10 +1674,16 @@ export default function ControlsTab() {
               
               <TouchableOpacity 
                 style={styles.controlButton}
-                onPress={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
+                onPress={() => {
+                  try {
+                    setViewMode(viewMode === 'grid' ? 'list' : 'grid');
+                  } catch (error) {
+                    console.error('Error toggling view mode:', error);
+                  }
+                }}
               >
                 <MaterialIcons 
-                  name={viewMode === 'grid' ? 'view-list' : 'dashboard'} 
+                  name={viewMode === 'grid' ? 'view-list' : 'grid-view'} 
                   size={14} 
                   color="#a1a1aa" 
                 />
@@ -1808,12 +1832,28 @@ export default function ControlsTab() {
         ) : (
           <FlatList
             data={filteredAppliances}
-            renderItem={renderDeviceCard}
-            keyExtractor={(item) => item.id}
+            renderItem={({ item, index }) => {
+              try {
+                return renderDeviceCard({ item, index });
+              } catch (error) {
+                console.error('Error rendering device card:', error);
+                return (
+                  <View style={styles.errorCard}>
+                    <Text style={styles.errorText}>Error loading device</Text>
+                  </View>
+                );
+              }
+            }}
+            keyExtractor={(item) => `device-${item.id}-${viewMode}`}
             numColumns={viewMode === 'grid' ? 2 : 1}
             scrollEnabled={false}
             contentContainerStyle={viewMode === 'grid' ? styles.deviceGrid : styles.deviceList}
-            key={viewMode}
+            key={`${viewMode}-${filteredAppliances.length}`}
+            removeClippedSubviews={false}
+            initialNumToRender={10}
+            maxToRenderPerBatch={5}
+            updateCellsBatchingPeriod={100}
+            windowSize={10}
           />
         )}
 
@@ -1826,3 +1866,163 @@ export default function ControlsTab() {
     </SafeAreaView>
   );
 }
+
+// Add error handling styles
+const errorStyles = StyleSheet.create({
+  errorCard: {
+    flex: 1,
+    margin: 8,
+    padding: 16,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 120,
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  // ML Insights Styles
+  mlBanner: {
+    backgroundColor: 'rgba(139, 92, 246, 0.1)',
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 24,
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.3)',
+  },
+  mlBannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  mlBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  mlBannerTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 2,
+  },
+  mlBannerSubtitle: {
+    fontSize: 12,
+    color: '#a1a1aa',
+  },
+  mlBannerPreview: {
+    fontSize: 14,
+    color: '#d1d5db',
+    lineHeight: 20,
+  },
+  mlInsightsExpanded: {
+    marginTop: 12,
+    gap: 12,
+  },
+  mlInsightCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  mlInsightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  mlPriorityDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  mlInsightType: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#8b5cf6',
+    textTransform: 'capitalize',
+  },
+  mlInsightText: {
+    fontSize: 14,
+    color: '#ffffff',
+    lineHeight: 18,
+    marginBottom: 6,
+  },
+  mlInsightSavings: {
+    fontSize: 12,
+    color: '#10b981',
+    fontWeight: '600',
+  },
+  mlPredictionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(139, 92, 246, 0.2)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  mlPredictionText: {
+    fontSize: 10,
+    color: '#8b5cf6',
+    fontWeight: '500',
+  },
+  mlPredictionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: 'rgba(139, 92, 246, 0.2)',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    marginVertical: 4,
+  },
+  mlPredictionChipText: {
+    fontSize: 8,
+    color: '#8b5cf6',
+    fontWeight: '600',
+  },
+  smartAutomationCard: {
+    backgroundColor: 'rgba(139, 92, 246, 0.1)',
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.3)',
+  },
+  smartAutomationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 4,
+  },
+  smartAutomationTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#8b5cf6',
+  },
+  smartAutomationText: {
+    fontSize: 10,
+    color: '#d1d5db',
+  },
+  diagnosticsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  deviceListDiagnostics: {
+    fontSize: 10,
+    color: '#6b7280',
+  },
+});

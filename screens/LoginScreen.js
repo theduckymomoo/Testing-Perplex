@@ -91,13 +91,14 @@ export default function LoginScreen() {
   const [attemptCount, setAttemptCount] = useState(0);
   const [isBlocked, setIsBlocked] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
+  const [loginSuccess, setLoginSuccess] = useState(false);
 
-  // Navigate to Dashboard when user is signed in and profile is loaded
+  // Only navigate to Dashboard when login is explicitly successful
   useEffect(() => {
-    if (user && userProfile && !loading && !profileLoading) {
+    if (loginSuccess && user && userProfile && !loading && !profileLoading) {
       navigation.replace("Dashboard");
     }
-  }, [user, userProfile, loading, profileLoading, navigation]);
+  }, [loginSuccess, user, userProfile, loading, profileLoading, navigation]);
 
   // Rate limiting: block after 5 failed attempts for 5 minutes
   useEffect(() => {
@@ -111,6 +112,18 @@ export default function LoginScreen() {
       return () => clearTimeout(timer);
     }
   }, [attemptCount]);
+
+  // Clear form data function
+  const clearFormData = useCallback(() => {
+    setFormData({
+      email: "",
+      password: "",
+    });
+    setErrors({});
+    setTouched({});
+    setShowPassword(false);
+    setFocusedField(null);
+  }, []);
 
   // Email validation with comprehensive regex
   const validateEmail = useCallback((email) => {
@@ -207,7 +220,9 @@ export default function LoginScreen() {
       );
 
       if (error) {
+        // Authentication failed - increment attempt count and show error
         setAttemptCount(prev => prev + 1);
+        setLoginSuccess(false); // Ensure login success is false
 
         let errorMessage = error.message;
         if (error.message.includes("Invalid login credentials")) {
@@ -218,22 +233,37 @@ export default function LoginScreen() {
           errorMessage = "Too many sign-in attempts. Please wait a moment before trying again.";
         }
 
+        // Clear form fields after failed authentication
+        clearFormData();
+
         Alert.alert("Sign In Failed", errorMessage);
-      } else {
+      } else if (data && data.user) {
+        // Authentication successful
         setAttemptCount(0);
+        setLoginSuccess(true); // Set login success to trigger navigation
       }
     } catch (err) {
+      // Handle unexpected errors
       setAttemptCount(prev => prev + 1);
+      setLoginSuccess(false);
+      
+      // Clear form fields after unexpected error
+      clearFormData();
+      
       Alert.alert("Sign In Failed", "An unexpected error occurred. Please try again.");
     }
-  }, [formData, validateForm, signIn, isBlocked]);
+  }, [formData, validateForm, signIn, isBlocked, clearFormData]);
 
   const handleEmailChange = useCallback((text) => {
     setFormData(prev => ({ ...prev, email: text }));
+    // Clear login success when user starts typing again
+    setLoginSuccess(false);
   }, []);
 
   const handlePasswordChange = useCallback((text) => {
     setFormData(prev => ({ ...prev, password: text }));
+    // Clear login success when user starts typing again
+    setLoginSuccess(false);
   }, []);
 
   const handleBlur = useCallback((field, value) => {
@@ -245,6 +275,13 @@ export default function LoginScreen() {
   const handleFocus = useCallback((field) => {
     setFocusedField(field);
   }, []);
+
+  // Clear fields when blocked state changes
+  useEffect(() => {
+    if (isBlocked) {
+      clearFormData();
+    }
+  }, [isBlocked, clearFormData]);
 
   const isLoading = loading || profileLoading;
   const isFormValid = formData.email.trim().length > 0 && formData.password.length > 0;
@@ -277,9 +314,7 @@ export default function LoginScreen() {
               resizeMode="contain"
             />
           </View>
-          <Text style={styles.title}>
-            {userProfile?.first_name ? `Welcome ${userProfile.first_name}` : "Welcome Back"}
-          </Text>
+          <Text style={styles.title}>Welcome Back</Text>
           <Text style={styles.subtitle}>Sign in to Home IQ</Text>
         </View>
 
@@ -383,6 +418,7 @@ export default function LoginScreen() {
   );
 }
 
+// ... (styles remain the same)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -403,7 +439,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
-    // Removed background and border styles
   },
   logo: {
     width: 100,
