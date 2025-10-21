@@ -7,15 +7,12 @@ import {
   Modal,
   Alert,
   FlatList,
-  Dimensions,
   Share,
   RefreshControl,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import mlService from './MLService';
-
-const { width } = Dimensions.get('window');
+import styles from './MLDataViewerStyles';
 
 const MLDataViewer = ({ visible, onClose, userId }) => {
   const [trainingData, setTrainingData] = useState({
@@ -30,7 +27,7 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
     userId: userId,
   });
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedTab, setSelectedTab] = useState('summary'); // summary, samples, actions, chart
+  const [selectedTab, setSelectedTab] = useState('summary');
 
   useEffect(() => {
     if (visible) {
@@ -45,7 +42,7 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
     try {
       const engine = mlService.getCurrentEngine();
       if (!engine) {
-        console.warn('No ML engine available');
+        console.warn('No ML engine available for data viewer');
         return;
       }
 
@@ -110,11 +107,23 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
   };
 
   const renderSummary = () => (
-    <ScrollView style={styles.tabContent} refreshControl={
-      <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-    }>
+    <ScrollView 
+      style={styles.tabContent} 
+      contentContainerStyle={styles.scrollContent}
+      refreshControl={
+        <RefreshControl 
+          refreshing={refreshing} 
+          onRefresh={onRefresh}
+          colors={['#10b981']}
+          tintColor="#10b981"
+        />
+      }
+    >
       <View style={styles.summaryCard}>
-        <Text style={styles.cardTitle}>📊 Training Data Summary</Text>
+        <View style={styles.cardHeader}>
+          <MaterialIcons name="analytics" size={20} color="#10b981" />
+          <Text style={styles.cardTitle}>Training Data Summary</Text>
+        </View>
         
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Total Samples:</Text>
@@ -153,17 +162,33 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
       </View>
 
       <View style={styles.summaryCard}>
-        <Text style={styles.cardTitle}>🔄 Live Status</Text>
+        <View style={styles.cardHeader}>
+          <MaterialIcons name="update" size={20} color="#3b82f6" />
+          <Text style={styles.cardTitle}>Live Status</Text>
+        </View>
+        
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Simulation:</Text>
-          <Text style={[styles.statValue, { color: mlService.isSimulating ? '#4CAF50' : '#FF9800' }]}>
-            {mlService.isSimulating ? 'Running' : 'Stopped'}
-          </Text>
+          <View style={styles.statusIndicator}>
+            <View style={[
+              styles.statusDot, 
+              { backgroundColor: mlService.isSimulating ? '#10b981' : '#f59e0b' }
+            ]} />
+            <Text style={[
+              styles.statValue, 
+              { color: mlService.isSimulating ? '#10b981' : '#f59e0b' }
+            ]}>
+              {mlService.isSimulating ? 'Running' : 'Stopped'}
+            </Text>
+          </View>
         </View>
         
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Auto-refresh:</Text>
-          <Text style={[styles.statValue, { color: '#4CAF50' }]}>Every 5s</Text>
+          <View style={styles.statusIndicator}>
+            <View style={[styles.statusDot, { backgroundColor: '#10b981' }]} />
+            <Text style={[styles.statValue, { color: '#10b981' }]}>Every 5s</Text>
+          </View>
         </View>
       </View>
     </ScrollView>
@@ -172,7 +197,10 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
   const renderDeviceSample = ({ item, index }) => (
     <View style={styles.sampleCard}>
       <View style={styles.sampleHeader}>
-        <Text style={styles.sampleTitle}>Sample #{index + 1}</Text>
+        <View style={styles.sampleTitleContainer}>
+          <MaterialIcons name="memory" size={16} color="#10b981" />
+          <Text style={styles.sampleTitle}>Sample #{index + 1}</Text>
+        </View>
         <Text style={styles.sampleDate}>
           {new Date(item.timestamp).toLocaleDateString()} {new Date(item.timestamp).toLocaleTimeString()}
         </Text>
@@ -193,9 +221,9 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
             <MaterialIcons 
               name={device.isActive ? "check-circle" : "radio-button-unchecked"} 
               size={16} 
-              color={device.isActive ? "#4CAF50" : "#666"} 
+              color={device.isActive ? "#10b981" : "#6c757d"} 
             />
-            <Text style={[styles.deviceName, { color: device.isActive ? '#fff' : '#999' }]}>
+            <Text style={[styles.deviceName, { color: device.isActive ? '#ffffff' : '#6c757d' }]}>
               {device.type} - {Math.round(device.power || 0)}W
             </Text>
           </View>
@@ -207,7 +235,10 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
   const renderUserAction = ({ item, index }) => (
     <View style={styles.actionCard}>
       <View style={styles.sampleHeader}>
-        <Text style={styles.sampleTitle}>Action #{index + 1}</Text>
+        <View style={styles.sampleTitleContainer}>
+          <MaterialIcons name="touch-app" size={16} color="#3b82f6" />
+          <Text style={styles.sampleTitle}>Action #{index + 1}</Text>
+        </View>
         <Text style={styles.sampleDate}>
           {new Date(item.timestamp).toLocaleDateString()} {new Date(item.timestamp).toLocaleTimeString()}
         </Text>
@@ -227,16 +258,28 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
     const maxCount = Math.max(...hourCounts, 1);
     
     return (
-      <ScrollView style={styles.tabContent} refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      }>
+      <ScrollView 
+        style={styles.tabContent} 
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh}
+            colors={['#10b981']}
+            tintColor="#10b981"
+          />
+        }
+      >
         <View style={styles.summaryCard}>
-          <Text style={styles.cardTitle}>📈 Hourly Distribution</Text>
+          <View style={styles.cardHeader}>
+            <MaterialIcons name="bar-chart" size={20} color="#f59e0b" />
+            <Text style={styles.cardTitle}>Hourly Distribution</Text>
+          </View>
           <Text style={styles.chartSubtitle}>Samples collected per hour (0-23)</Text>
           
           <View style={styles.chartContainer}>
             {hourCounts.map((count, hour) => {
-              const height = Math.max(4, (count / maxCount) * 100);
+              const height = Math.max(4, (count / maxCount) * 80);
               return (
                 <View key={hour} style={styles.barContainer}>
                   <Text style={styles.barLabel}>{count}</Text>
@@ -245,7 +288,7 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
                       styles.bar, 
                       { 
                         height: height,
-                        backgroundColor: count > 0 ? '#4CAF50' : '#333'
+                        backgroundColor: count > 0 ? '#10b981' : '#18181b'
                       }
                     ]} 
                   />
@@ -319,64 +362,73 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
     );
   };
 
+  // FIXED: Tab buttons with proper layout
   const renderTabButtons = () => (
     <View style={styles.tabContainer}>
-      <TouchableOpacity 
-        style={[styles.tabButton, selectedTab === 'summary' && styles.activeTab]}
-        onPress={() => setSelectedTab('summary')}
+      <ScrollView 
+        horizontal 
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabScrollView}
       >
-        <MaterialIcons name="dashboard" size={16} color={selectedTab === 'summary' ? '#4CAF50' : '#666'} />
-        <Text style={[styles.tabText, selectedTab === 'summary' && styles.activeTabText]}>
-          Summary
-        </Text>
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        style={[styles.tabButton, selectedTab === 'samples' && styles.activeTab]}
-        onPress={() => setSelectedTab('samples')}
-      >
-        <MaterialIcons name="list" size={16} color={selectedTab === 'samples' ? '#4CAF50' : '#666'} />
-        <Text style={[styles.tabText, selectedTab === 'samples' && styles.activeTabText]}>
-          Samples ({trainingData.deviceUsage.length})
-        </Text>
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        style={[styles.tabButton, selectedTab === 'actions' && styles.activeTab]}
-        onPress={() => setSelectedTab('actions')}
-      >
-        <MaterialIcons name="touch-app" size={16} color={selectedTab === 'actions' ? '#4CAF50' : '#666'} />
-        <Text style={[styles.tabText, selectedTab === 'actions' && styles.activeTabText]}>
-          Actions ({trainingData.userActions.length})
-        </Text>
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        style={[styles.tabButton, selectedTab === 'chart' && styles.activeTab]}
-        onPress={() => setSelectedTab('chart')}
-      >
-        <MaterialIcons name="bar-chart" size={16} color={selectedTab === 'chart' ? '#4CAF50' : '#666'} />
-        <Text style={[styles.tabText, selectedTab === 'chart' && styles.activeTabText]}>
-          Chart
-        </Text>
-      </TouchableOpacity>
+        <View style={styles.tabButtonsRow}>
+          <TouchableOpacity 
+            style={[styles.tabButton, selectedTab === 'summary' && styles.activeTab]}
+            onPress={() => setSelectedTab('summary')}
+          >
+            <MaterialIcons name="dashboard" size={14} color={selectedTab === 'summary' ? '#10b981' : '#6c757d'} />
+            <Text style={[styles.tabText, selectedTab === 'summary' && styles.activeTabText]}>
+              Summary
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={[styles.tabButton, selectedTab === 'samples' && styles.activeTab]}
+            onPress={() => setSelectedTab('samples')}
+          >
+            <MaterialIcons name="list" size={14} color={selectedTab === 'samples' ? '#10b981' : '#6c757d'} />
+            <Text style={[styles.tabText, selectedTab === 'samples' && styles.activeTabText]}>
+              Samples ({trainingData.deviceUsage.length})
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={[styles.tabButton, selectedTab === 'actions' && styles.activeTab]}
+            onPress={() => setSelectedTab('actions')}
+          >
+            <MaterialIcons name="touch-app" size={14} color={selectedTab === 'actions' ? '#10b981' : '#6c757d'} />
+            <Text style={[styles.tabText, selectedTab === 'actions' && styles.activeTabText]}>
+              Actions ({trainingData.userActions.length})
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={[styles.tabButton, selectedTab === 'chart' && styles.activeTab]}
+            onPress={() => setSelectedTab('chart')}
+          >
+            <MaterialIcons name="bar-chart" size={14} color={selectedTab === 'chart' ? '#10b981' : '#6c757d'} />
+            <Text style={[styles.tabText, selectedTab === 'chart' && styles.activeTabText]}>
+              Chart
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     </View>
   );
 
   const renderExportButtons = () => (
     <View style={styles.exportContainer}>
       <TouchableOpacity style={styles.exportButton} onPress={exportAsJSON}>
-        <MaterialIcons name="code" size={16} color="#fff" />
+        <MaterialIcons name="code" size={16} color="#ffffff" />
         <Text style={styles.exportButtonText}>JSON</Text>
       </TouchableOpacity>
       
       <TouchableOpacity style={styles.exportButton} onPress={exportAsCSV}>
-        <MaterialIcons name="table-chart" size={16} color="#fff" />
+        <MaterialIcons name="table-chart" size={16} color="#ffffff" />
         <Text style={styles.exportButtonText}>CSV</Text>
       </TouchableOpacity>
       
       <TouchableOpacity style={[styles.exportButton, styles.clearButton]} onPress={clearAllData}>
-        <MaterialIcons name="delete-forever" size={16} color="#fff" />
+        <MaterialIcons name="delete-forever" size={16} color="#ffffff" />
         <Text style={styles.exportButtonText}>Clear</Text>
       </TouchableOpacity>
     </View>
@@ -393,14 +445,23 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
             renderItem={renderDeviceSample}
             keyExtractor={(_, index) => index.toString()}
             style={styles.tabContent}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            contentContainerStyle={styles.scrollContent}
+            refreshControl={
+              <RefreshControl 
+                refreshing={refreshing} 
+                onRefresh={onRefresh}
+                colors={['#10b981']}
+                tintColor="#10b981"
+              />
+            }
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <MaterialIcons name="storage" size={48} color="#666" />
+                <MaterialIcons name="storage" size={48} color="#6c757d" />
                 <Text style={styles.emptyText}>No training data available</Text>
                 <Text style={styles.emptySubText}>Run simulation to collect data</Text>
               </View>
             }
+            showsVerticalScrollIndicator={false}
           />
         );
       case 'actions':
@@ -410,13 +471,23 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
             renderItem={renderUserAction}
             keyExtractor={(_, index) => index.toString()}
             style={styles.tabContent}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            contentContainerStyle={styles.scrollContent}
+            refreshControl={
+              <RefreshControl 
+                refreshing={refreshing} 
+                onRefresh={onRefresh}
+                colors={['#10b981']}
+                tintColor="#10b981"
+              />
+            }
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <MaterialIcons name="touch-app" size={48} color="#666" />
+                <MaterialIcons name="touch-app" size={48} color="#6c757d" />
                 <Text style={styles.emptyText}>No user actions recorded</Text>
+                <Text style={styles.emptySubText}>Actions will appear as you use the app</Text>
               </View>
             }
+            showsVerticalScrollIndicator={false}
           />
         );
       case 'chart':
@@ -428,14 +499,14 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false}>
-      <LinearGradient colors={['#0a0a0b', '#1a1a1b']} style={styles.container}>
+      <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-            <MaterialIcons name="arrow-back" size={24} color="#fff" />
+            <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
           </TouchableOpacity>
           <Text style={styles.title}>ML Training Data Viewer</Text>
           <TouchableOpacity onPress={loadData} style={styles.refreshButton}>
-            <MaterialIcons name="refresh" size={24} color="#fff" />
+            <MaterialIcons name="refresh" size={24} color="#ffffff" />
           </TouchableOpacity>
         </View>
 
@@ -444,236 +515,9 @@ const MLDataViewer = ({ visible, onClose, userId }) => {
         {renderTabContent()}
         
         {renderExportButtons()}
-      </LinearGradient>
+      </View>
     </Modal>
   );
-};
-
-const styles = {
-  container: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 50,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
-  },
-  closeButton: {
-    padding: 8,
-  },
-  refreshButton: {
-    padding: 8,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#fff',
-    flex: 1,
-    textAlign: 'center',
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#1a1a1b',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  tabButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    marginHorizontal: 4,
-    borderRadius: 8,
-    backgroundColor: '#2a2a2b',
-  },
-  activeTab: {
-    backgroundColor: '#333',
-    borderWidth: 1,
-    borderColor: '#4CAF50',
-  },
-  tabText: {
-    color: '#666',
-    fontSize: 12,
-    fontWeight: '600',
-    marginLeft: 4,
-  },
-  activeTabText: {
-    color: '#4CAF50',
-  },
-  tabContent: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  summaryCard: {
-    backgroundColor: '#1a1a1b',
-    borderRadius: 12,
-    padding: 16,
-    marginVertical: 8,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-    marginBottom: 16,
-  },
-  statRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2a2a2b',
-  },
-  statLabel: {
-    color: '#999',
-    fontSize: 14,
-  },
-  statValue: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  sampleCard: {
-    backgroundColor: '#1a1a1b',
-    borderRadius: 12,
-    padding: 16,
-    marginVertical: 4,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  actionCard: {
-    backgroundColor: '#1a1a1b',
-    borderRadius: 12,
-    padding: 16,
-    marginVertical: 4,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  sampleHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  sampleTitle: {
-    color: '#4CAF50',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  sampleDate: {
-    color: '#999',
-    fontSize: 12,
-  },
-  sampleInfo: {
-    marginBottom: 12,
-  },
-  sampleDetail: {
-    color: '#ccc',
-    fontSize: 13,
-    marginVertical: 2,
-  },
-  devicesContainer: {
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-    paddingTop: 8,
-  },
-  devicesTitle: {
-    color: '#999',
-    fontSize: 13,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  deviceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 2,
-  },
-  deviceName: {
-    marginLeft: 8,
-    fontSize: 13,
-  },
-  chartContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    height: 120,
-    paddingHorizontal: 4,
-    marginTop: 16,
-  },
-  barContainer: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  bar: {
-    width: 8,
-    backgroundColor: '#4CAF50',
-    borderRadius: 2,
-    marginHorizontal: 1,
-  },
-  barLabel: {
-    color: '#999',
-    fontSize: 8,
-    marginBottom: 4,
-  },
-  hourLabel: {
-    color: '#666',
-    fontSize: 8,
-    marginTop: 4,
-  },
-  chartSubtitle: {
-    color: '#999',
-    fontSize: 12,
-    marginTop: 4,
-  },
-  exportContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-  },
-  exportButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#4CAF50',
-    paddingVertical: 12,
-    borderRadius: 8,
-    marginHorizontal: 4,
-  },
-  clearButton: {
-    backgroundColor: '#f44336',
-  },
-  exportButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    marginLeft: 4,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 64,
-  },
-  emptyText: {
-    color: '#999',
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 16,
-  },
-  emptySubText: {
-    color: '#666',
-    fontSize: 14,
-    marginTop: 4,
-  },
 };
 
 export default MLDataViewer;

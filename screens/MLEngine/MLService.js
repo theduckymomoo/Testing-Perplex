@@ -21,6 +21,10 @@ class MLService {
       useSimulatedData: true,
       simulationDataWeight: 0.7,
       cloudSyncEnabled: true,
+      // NEW: Day-based sampling configuration
+      samplingMode: 'daily', // 'hourly' or 'daily'
+      hoursPerSample: 24, // Full day samples
+      contextWindow: 3, // Hours of context around each sample
     };
   }
 
@@ -49,6 +53,7 @@ class MLService {
         predictionHorizon: 24,
         retrainInterval: 3600000,
         confidenceThreshold: 0.7,
+        samplingMode: 'daily', // Pass sampling mode to engine
       });
       
       // Set Supabase client for cloud sync
@@ -75,7 +80,667 @@ class MLService {
     return this.currentEngine;
   }
 
-  // Safe method calls that check for engine availability
+  // UPDATED: Day-based data collection
+  async collectData(appliances) {
+    const engine = this.getCurrentEngine();
+    if (!engine) { 
+      console.warn('⚠️ ML Engine not available for data collection');
+      return; 
+    }
+    
+    try {
+      const deviceList = Array.isArray(appliances) ? appliances : [];
+      
+      // Collect full day pattern instead of single point
+      await engine.collectDayPattern(deviceList);
+      
+      const min = this.simulationEnabled ? 
+        Math.max(7, engine.config.minDataPoints * 0.3) : // Days instead of hours
+        engine.config.minDataPoints;
+        
+      if (this.config.autoTrainEnabled && 
+          engine.trainingData.dayPatterns.length >= min && 
+          engine.shouldRetrain()) {
+        console.log('🔄 Auto-retraining triggered');
+        await this.trainModels();
+      }
+    } catch (error) { 
+      console.error('Error collecting data:', error); 
+    }
+  }
+
+  // UPDATED: Fast-forward simulation with day-based approach
+  async fastForwardSimulation(days = 7, onProgress = null) {
+    if (!this.simulationEnabled) return { success: false, error: 'Simulation not enabled' };
+    if (!this.hasCurrentUser()) return { success: false, error: 'No user selected for simulation' };
+    
+    console.log(`⏩ ML Fast-forwarding ${days} days with full day patterns...`);
+    
+    let daysGenerated = 0;
+    
+    for (let day = 0; day < days; day++) {
+      const dayPattern = this.generateFullDayPattern(day);
+      
+      await this.injectDayPattern(dayPattern);
+      
+      daysGenerated++;
+      
+      if (onProgress) {
+        onProgress({
+          day: day + 1,
+          totalDays: days,
+          samples: daysGenerated,
+          progress: Math.round(((day + 1) / days) * 100)
+        });
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    if (this.currentEngine.trainingData.dayPatterns.length >= this.currentEngine.config.minDataPoints) {
+      console.log('🎓 Auto-training with day patterns...');
+      await this.trainModels();
+    }
+    
+    return { 
+      success: true, 
+      samplesGenerated: daysGenerated, 
+      simulatedDays: days, 
+      status: this.getSimulationStatus() 
+    };
+  }
+
+  // NEW: Generate full day pattern with realistic transitions
+  generateFullDayPattern(dayOffset = 0) {
+    const currentDate = new Date();
+    currentDate.setDate(currentDate.getDate() - dayOffset);
+    
+    const isWeekend = currentDate.getDay() === 0 || currentDate.getDay() === 6;
+    const dayType = isWeekend ? 'weekend' : 'weekday';
+    
+    // Generate full 24-hour pattern with context and transitions
+    const hourlyData = [];
+    const dayEvents = this.generateDayEvents(isWeekend);
+    
+    for (let hour = 0; hour < 24; hour++) {
+      const timestamp = new Date(currentDate);
+      timestamp.setHours(hour, Math.floor(Math.random() * 60), Math.floor(Math.random() * 60));
+      
+      const devices = this.currentAppliances.map(appliance => {
+        const devicePattern = this.getRealisticDeviceState(
+          appliance, 
+          hour, 
+          isWeekend, 
+          dayEvents,
+          hourlyData[hour - 1] // Previous hour for context
+        );
+        
+        return {
+          id: appliance.id,
+          type: appliance.type,
+          room: appliance.room,
+          status: devicePattern.isActive ? 'on' : 'off',
+          power: devicePattern.power,
+          isActive: devicePattern.isActive,
+          transitionReason: devicePattern.reason, // Why it changed
+          context: devicePattern.context,
+        };
+      });
+
+      const totalPower = devices
+        .filter(device => device.isActive)
+        .reduce((sum, device) => sum + device.power, 0);
+
+      hourlyData.push({
+        timestamp: timestamp.toISOString(),
+        hour,
+        dayOfWeek: currentDate.getDay(),
+        isWeekend,
+        devices,
+        totalPower,
+        activeDeviceCount: devices.filter(d => d.isActive).length,
+        dayEvents: dayEvents.filter(event => event.hour === hour),
+        context: {
+          previousHourPower: hour > 0 ? hourlyData[hour - 1].totalPower : 0,
+          powerTrend: this.calculatePowerTrend(hourlyData, hour),
+          timeOfDay: this.getTimeOfDayContext(hour),
+        }
+      });
+    }
+
+    // Generate user actions based on device transitions
+    const userActions = this.extractUserActionsFromDay(hourlyData, currentDate);
+    
+    return {
+      date: currentDate.toISOString().split('T')[0],
+      dayOfWeek: currentDate.getDay(),
+      isWeekend,
+      dayType,
+      hourlyData,
+      userActions,
+      dayEvents,
+      summary: {
+        totalEnergyKwh: hourlyData.reduce((sum, hour) => sum + hour.totalPower, 0) / 1000,
+        peakHour: hourlyData.reduce((max, hour) => hour.totalPower > max.totalPower ? hour : max, hourlyData[0]),
+        averagePower: hourlyData.reduce((sum, hour) => sum + hour.totalPower, 0) / 24,
+        activeDeviceHours: hourlyData.reduce((sum, hour) => sum + hour.activeDeviceCount, 0),
+      }
+    };
+  }
+
+  // NEW: Generate realistic day events that affect device usage
+  generateDayEvents(isWeekend) {
+    const events = [];
+    
+    // Morning routine
+    if (Math.random() < 0.8) {
+      const wakeUpHour = isWeekend ? 7 + Math.floor(Math.random() * 3) : 6 + Math.floor(Math.random() * 2);
+      events.push({
+        hour: wakeUpHour,
+        type: 'wake_up',
+        impact: 'increased_activity',
+        description: 'Morning wake up routine',
+        deviceTypes: ['light', 'kettle', 'tv', 'computer']
+      });
+    }
+    
+    // Meal times
+    [7, 12, 18].forEach(mealHour => {
+      if (Math.random() < 0.7) {
+        events.push({
+          hour: mealHour + Math.floor(Math.random() * 2),
+          type: 'meal_time',
+          impact: 'kitchen_activity',
+          description: 'Meal preparation',
+          deviceTypes: ['microwave', 'kettle', 'light']
+        });
+      }
+    });
+    
+    // Work hours (if weekday)
+    if (!isWeekend) {
+      events.push({
+        hour: 8 + Math.floor(Math.random() * 2),
+        type: 'work_start',
+        impact: 'work_activity',
+        description: 'Start working from home',
+        deviceTypes: ['computer', 'light']
+      });
+      
+      events.push({
+        hour: 17 + Math.floor(Math.random() * 2),
+        type: 'work_end',
+        impact: 'relaxation_activity',
+        description: 'End of work day',
+        deviceTypes: ['tv', 'computer']
+      });
+    }
+    
+    // Evening routine
+    if (Math.random() < 0.9) {
+      const eveningHour = 18 + Math.floor(Math.random() * 4);
+      events.push({
+        hour: eveningHour,
+        type: 'evening_routine',
+        impact: 'comfort_activity',
+        description: 'Evening relaxation',
+        deviceTypes: ['tv', 'light', 'air conditioner', 'heater']
+      });
+    }
+    
+    // Bedtime
+    if (Math.random() < 0.8) {
+      const bedtimeHour = isWeekend ? 23 + Math.floor(Math.random() * 2) : 22 + Math.floor(Math.random() * 2);
+      events.push({
+        hour: bedtimeHour,
+        type: 'bedtime',
+        impact: 'decreased_activity',
+        description: 'Getting ready for bed',
+        deviceTypes: ['light', 'tv', 'computer']
+      });
+    }
+    
+    return events;
+  }
+
+  // NEW: Get realistic device state based on full day context
+  getRealisticDeviceState(appliance, hour, isWeekend, dayEvents, previousHourData) {
+    const basePattern = this.getDeviceHourlyProbability(appliance.type, hour, isWeekend);
+    let probability = basePattern.probability;
+    let reason = basePattern.reason;
+    
+    // Adjust based on day events
+    const relevantEvents = dayEvents.filter(event => 
+      Math.abs(event.hour - hour) <= 1 && 
+      event.deviceTypes.includes(appliance.type)
+    );
+    
+    relevantEvents.forEach(event => {
+      switch (event.impact) {
+        case 'increased_activity':
+          probability *= 1.5;
+          reason = `${event.description} - ${reason}`;
+          break;
+        case 'decreased_activity':
+          probability *= 0.3;
+          reason = `${event.description} - ${reason}`;
+          break;
+        case 'kitchen_activity':
+          if (['microwave', 'kettle'].includes(appliance.type)) {
+            probability *= 2.0;
+            reason = `${event.description}`;
+          }
+          break;
+        case 'work_activity':
+          if (appliance.type === 'computer') {
+            probability *= 1.8;
+            reason = `${event.description}`;
+          }
+          break;
+        case 'comfort_activity':
+          if (['tv', 'air conditioner', 'heater'].includes(appliance.type)) {
+            probability *= 1.4;
+            reason = `${event.description}`;
+          }
+          break;
+      }
+    });
+    
+    // Consider previous hour state for continuity
+    if (previousHourData) {
+      const prevDevice = previousHourData.devices.find(d => d.id === appliance.id);
+      if (prevDevice?.isActive) {
+        // Device was on - more likely to stay on
+        probability *= 1.3;
+        reason += ' (continuation)';
+      }
+    }
+    
+    // Cap probability
+    probability = Math.min(0.95, probability);
+    
+    const isActive = Math.random() < probability;
+    const power = isActive ? (appliance.normal_usage || 100) : 0;
+    
+    return {
+      isActive,
+      power,
+      probability,
+      reason,
+      context: {
+        basePattern: basePattern.reason,
+        dayEvents: relevantEvents.map(e => e.type),
+        hour,
+        dayType: isWeekend ? 'weekend' : 'weekday',
+      }
+    };
+  }
+
+  // NEW: Device probability patterns based on type and time
+  getDeviceHourlyProbability(deviceType, hour, isWeekend) {
+    const patterns = {
+      refrigerator: {
+        probability: 1.0, // Always on
+        reason: 'Essential appliance - always running'
+      },
+      
+      router: {
+        probability: 1.0, // Always on
+        reason: 'Network essential - always running'
+      },
+      
+      light: {
+        probability: this.getLightProbability(hour, isWeekend),
+        reason: this.getLightReason(hour, isWeekend)
+      },
+      
+      tv: {
+        probability: this.getTVProbability(hour, isWeekend),
+        reason: this.getTVReason(hour, isWeekend)
+      },
+      
+      computer: {
+        probability: this.getComputerProbability(hour, isWeekend),
+        reason: this.getComputerReason(hour, isWeekend)
+      },
+      
+      'air conditioner': {
+        probability: this.getACProbability(hour, isWeekend),
+        reason: this.getACReason(hour, isWeekend)
+      },
+      
+      heater: {
+        probability: this.getHeaterProbability(hour, isWeekend),
+        reason: this.getHeaterReason(hour, isWeekend)
+      },
+      
+      microwave: {
+        probability: this.getMicrowaveProbability(hour, isWeekend),
+        reason: this.getMicrowaveReason(hour, isWeekend)
+      },
+      
+      kettle: {
+        probability: this.getKettleProbability(hour, isWeekend),
+        reason: this.getKettleReason(hour, isWeekend)
+      },
+      
+      'washing machine': {
+        probability: this.getWashingMachineProbability(hour, isWeekend),
+        reason: this.getWashingMachineReason(hour, isWeekend)
+      },
+      
+      default: {
+        probability: this.getDefaultProbability(hour, isWeekend),
+        reason: 'General usage pattern'
+      }
+    };
+    
+    return patterns[deviceType.toLowerCase()] || patterns.default;
+  }
+
+  // Device-specific probability functions
+  getLightProbability(hour, isWeekend) {
+    if (hour >= 22 || hour <= 6) return 0.8; // Night
+    if (hour >= 7 && hour <= 9) return 0.6; // Morning
+    if (hour >= 18 && hour <= 21) return 0.9; // Evening
+    return 0.1; // Daytime
+  }
+
+  getLightReason(hour, isWeekend) {
+    if (hour >= 22 || hour <= 6) return 'Night lighting for safety/comfort';
+    if (hour >= 7 && hour <= 9) return 'Morning routine lighting';
+    if (hour >= 18 && hour <= 21) return 'Evening activity lighting';
+    return 'Minimal daytime lighting';
+  }
+
+  getTVProbability(hour, isWeekend) {
+    if (isWeekend) {
+      if (hour >= 10 && hour <= 14) return 0.5; // Weekend afternoon
+      if (hour >= 19 && hour <= 23) return 0.8; // Weekend evening
+      return 0.2;
+    } else {
+      if (hour >= 19 && hour <= 22) return 0.7; // Weekday evening
+      if (hour >= 7 && hour <= 8) return 0.3; // Morning news
+      return 0.1;
+    }
+  }
+
+  getTVReason(hour, isWeekend) {
+    if (isWeekend && hour >= 10 && hour <= 14) return 'Weekend entertainment/relaxation';
+    if (hour >= 19 && hour <= 23) return 'Evening entertainment';
+    if (hour >= 7 && hour <= 8) return 'Morning news/weather';
+    return 'Occasional viewing';
+  }
+
+  getComputerProbability(hour, isWeekend) {
+    if (isWeekend) {
+      if (hour >= 14 && hour <= 20) return 0.4; // Weekend usage
+      return 0.1;
+    } else {
+      if (hour >= 8 && hour <= 17) return 0.8; // Work hours
+      if (hour >= 19 && hour <= 21) return 0.3; // Evening personal use
+      return 0.05;
+    }
+  }
+
+  getComputerReason(hour, isWeekend) {
+    if (!isWeekend && hour >= 8 && hour <= 17) return 'Work hours - high probability';
+    if (isWeekend && hour >= 14 && hour <= 20) return 'Weekend personal projects';
+    if (hour >= 19 && hour <= 21) return 'Evening personal use';
+    return 'Minimal usage outside work/personal time';
+  }
+
+  getACProbability(hour, isWeekend) {
+    // Hot afternoon hours
+    if (hour >= 12 && hour <= 18) return 0.6;
+    // Night cooling
+    if (hour >= 22 || hour <= 6) return 0.4;
+    return 0.1;
+  }
+
+  getACReason(hour, isWeekend) {
+    if (hour >= 12 && hour <= 18) return 'Hot afternoon - cooling needed';
+    if (hour >= 22 || hour <= 6) return 'Night cooling for sleep comfort';
+    return 'Minimal cooling needs';
+  }
+
+  getHeaterProbability(hour, isWeekend) {
+    // Morning warmup
+    if (hour >= 6 && hour <= 9) return 0.7;
+    // Evening warmth
+    if (hour >= 18 && hour <= 22) return 0.6;
+    return 0.1;
+  }
+
+  getHeaterReason(hour, isWeekend) {
+    if (hour >= 6 && hour <= 9) return 'Morning warmup for comfort';
+    if (hour >= 18 && hour <= 22) return 'Evening warmth for relaxation';
+    return 'Minimal heating needs';
+  }
+
+  getMicrowaveProbability(hour, isWeekend) {
+    if ([7, 12, 18, 19].includes(hour)) return 0.6; // Meal times
+    return 0.05;
+  }
+
+  getMicrowaveReason(hour, isWeekend) {
+    if ([7, 12, 18, 19].includes(hour)) return 'Meal preparation time';
+    return 'Occasional heating/reheating';
+  }
+
+  getKettleProbability(hour, isWeekend) {
+    if ([7, 10, 15, 20].includes(hour)) return 0.5; // Tea/coffee times
+    return 0.1;
+  }
+
+  getKettleReason(hour, isWeekend) {
+    if ([7, 10, 15, 20].includes(hour)) return 'Hot beverage preparation';
+    return 'Occasional hot drinks';
+  }
+
+  getWashingMachineProbability(hour, isWeekend) {
+    if (isWeekend && hour >= 9 && hour <= 15) return 0.3; // Weekend laundry
+    if (!isWeekend && hour >= 7 && hour <= 9) return 0.2; // Morning laundry
+    return 0.02;
+  }
+
+  getWashingMachineReason(hour, isWeekend) {
+    if (isWeekend && hour >= 9 && hour <= 15) return 'Weekend laundry time';
+    if (!isWeekend && hour >= 7 && hour <= 9) return 'Morning laundry before work';
+    return 'Occasional laundry';
+  }
+
+  getDefaultProbability(hour, isWeekend) {
+    if (hour >= 18 && hour <= 22) return 0.4; // Evening usage
+    if (hour >= 8 && hour <= 17) return 0.3; // Daytime usage
+    return 0.1; // Night/early morning
+  }
+
+  // NEW: Calculate power trend for context
+  calculatePowerTrend(hourlyData, currentHour) {
+    if (currentHour < 2) return 'stable';
+    
+    const recentHours = hourlyData.slice(Math.max(0, currentHour - 3), currentHour);
+    const powers = recentHours.map(h => h.totalPower);
+    
+    if (powers.length < 2) return 'stable';
+    
+    const trend = powers[powers.length - 1] - powers[0];
+    if (trend > 100) return 'increasing';
+    if (trend < -100) return 'decreasing';
+    return 'stable';
+  }
+
+  // NEW: Get time of day context
+  getTimeOfDayContext(hour) {
+    if (hour >= 22 || hour <= 5) return 'night';
+    if (hour >= 6 && hour <= 11) return 'morning';
+    if (hour >= 12 && hour <= 17) return 'afternoon';
+    if (hour >= 18 && hour <= 21) return 'evening';
+    return 'unknown';
+  }
+
+  // NEW: Extract realistic user actions from day pattern
+  extractUserActionsFromDay(hourlyData, date) {
+    const actions = [];
+    
+    for (let hour = 1; hour < hourlyData.length; hour++) {
+      const currentHour = hourlyData[hour];
+      const previousHour = hourlyData[hour - 1];
+      
+      currentHour.devices.forEach(device => {
+        const prevDevice = previousHour.devices.find(d => d.id === device.id);
+        
+        if (prevDevice && prevDevice.status !== device.status) {
+          // Device changed state
+          const actionTimestamp = new Date(currentHour.timestamp);
+          actionTimestamp.setMinutes(Math.floor(Math.random() * 60));
+          
+          actions.push({
+            timestamp: actionTimestamp.toISOString(),
+            hour: currentHour.hour,
+            dayOfWeek: currentHour.dayOfWeek,
+            deviceId: device.id,
+            deviceType: device.type,
+            action: device.status === 'on' ? 'toggle_on' : 'toggle_off',
+            context: {
+              manual: true,
+              dayBased: true,
+              reason: device.transitionReason,
+              timeOfDay: currentHour.context.timeOfDay,
+              totalActiveDevices: currentHour.activeDeviceCount,
+              totalPower: currentHour.totalPower,
+              powerTrend: currentHour.context.powerTrend,
+              dayEvents: currentHour.dayEvents.map(e => e.type),
+            }
+          });
+        }
+      });
+    }
+    
+    return actions;
+  }
+
+  // NEW: Inject full day pattern
+  async injectDayPattern(dayPattern) {
+    const engine = this.getCurrentEngine();
+    if (!engine || !dayPattern) return;
+    
+    try {
+      // Store day pattern in new format
+      if (!engine.trainingData.dayPatterns) {
+        engine.trainingData.dayPatterns = [];
+      }
+      
+      engine.trainingData.dayPatterns.push(dayPattern);
+      
+      // Also maintain backward compatibility with hourly data
+      engine.trainingData.deviceUsage.push(...dayPattern.hourlyData);
+      engine.trainingData.userActions.push(...dayPattern.userActions);
+      
+      console.log(`📥 Injected full day pattern for ${dayPattern.date} (${dayPattern.hourlyData.length} hours)`);
+      
+      await engine.saveTrainingData();
+      console.log(`📊 Total day patterns: ${engine.trainingData.dayPatterns.length}`);
+    } catch (error) {
+      console.error('Error injecting day pattern:', error);
+    }
+  }
+
+  // UPDATED: Get training progress based on days
+  getTrainingProgress() {
+    const engine = this.getCurrentEngine();
+    if (!engine) {
+      console.warn('⚠️ No ML engine available for training progress');
+      return { 
+        progress: 0, 
+        status: 'not_initialized', 
+        current: 0,
+        required: 7, // Days instead of samples
+        canTrain: false,
+        userId: this.currentUserId,
+        simulation: { enabled: this.simulationEnabled }
+      };
+    }
+    
+    const currentDays = engine.trainingData.dayPatterns?.length || Math.floor(engine.trainingData.deviceUsage.length / 24);
+    const requiredDays = this.simulationEnabled ? 7 : 14; // Fewer days needed
+      
+    const progress = Math.min(100, (currentDays / requiredDays) * 100);
+    
+    return {
+      progress: Math.round(progress),
+      current: currentDays,
+      required: requiredDays,
+      status: progress >= 100 ? 'ready' : 'collecting',
+      canTrain: currentDays >= requiredDays,
+      userId: this.currentUserId,
+      samplingMode: 'daily',
+      simulation: {
+        enabled: this.simulationEnabled,
+        isSimulating: this.isSimulating,
+        simulatedDays: currentDays,
+        totalSamples: engine.trainingData.deviceUsage.length,
+      },
+    };
+  }
+
+  // UPDATED: Clear user data method
+  async clearUserData() {
+    const engine = this.getCurrentEngine();
+    if (!engine) {
+      return { success: false, error: 'ML Engine not available' };
+    }
+    
+    try {
+      console.log('🗑️ Clearing all ML training data...');
+      
+      // Stop background collection to prevent immediate repopulation
+      this.stopBackgroundCollection();
+      
+      // Clear engine data including new day patterns
+      engine.trainingData = {
+        deviceUsage: [],
+        userActions: [],
+        contextData: [],
+        costData: [],
+        dayPatterns: [], // NEW: Clear day patterns
+      };
+      
+      // Reset models
+      engine.models = {
+        usagePatterns: null,
+        userBehavior: null,
+        costOptimization: null,
+        anomalyDetection: null,
+        dayPatterns: null, // NEW: Clear day pattern models
+      };
+      
+      // Reset metrics
+      engine.metrics = {
+        accuracy: 0,
+        lastTrainedAt: null,
+        predictionsMade: 0,
+        correctPredictions: 0,
+        userId: this.currentUserId,
+      };
+      
+      // Mark engine as uninitialized so it won't produce predictions
+      engine.initialized = false;
+      this.initialized = false;
+      
+      // Clear AsyncStorage
+      await AsyncStorage.multiRemove([engine.storageKey, engine.dataKey, engine.settingsKey]);
+      
+      console.log('✅ All ML data cleared successfully');
+      return { success: true, message: 'All training data cleared' };
+    } catch (error) {
+      console.error('Error clearing data:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Rest of existing methods remain the same...
   async initialize(userId = null, supabase = null) {
     if (userId) {
       this.setCurrentUser(userId, supabase);
@@ -108,40 +773,12 @@ class MLService {
     }
   }
 
-  // Safe data collection
-  async collectData(appliances) {
-    const engine = this.getCurrentEngine();
-    if (!engine) { 
-      console.warn('⚠️ ML Engine not available for data collection');
-      return; 
-    }
-    
-    try {
-      const deviceList = Array.isArray(appliances) ? appliances : [];
-      await engine.collectDeviceData(deviceList);
-      
-      const min = this.simulationEnabled ? 
-        Math.max(20, engine.config.minDataPoints * 0.3) : 
-        engine.config.minDataPoints;
-        
-      if (this.config.autoTrainEnabled && 
-          engine.trainingData.deviceUsage.length >= min && 
-          engine.shouldRetrain()) {
-        console.log('🔄 Auto-retraining triggered');
-        await this.trainModels();
-      }
-    } catch (error) { 
-      console.error('Error collecting data:', error); 
-    }
-  }
-
-  // Safe model training
   async trainModels() {
     const engine = this.getCurrentEngine();
     if (!engine) return { success: false, error: 'ML Engine not available' };
     
     try {
-      console.log('🎓 Starting ML model training...');
+      console.log('🎓 Starting ML model training with day patterns...');
       const result = await engine.trainModels();
       if (result.success) {
         console.log('✅ ML models trained successfully');
@@ -161,7 +798,6 @@ class MLService {
     }
   }
 
-  // Safe predictions with fallback
   async getPredictions(appliances, horizon = 24) {
     const engine = this.getCurrentEngine();
     if (!engine) {
@@ -199,7 +835,6 @@ class MLService {
     }
   }
 
-  // Safe recommendations with fallback
   getRecommendations(appliances) {
     const engine = this.getCurrentEngine();
     if (!engine) {
@@ -210,7 +845,6 @@ class MLService {
     return engine.getRecommendations(deviceList);
   }
 
-  // Safe anomaly detection with fallback
   detectAnomalies(appliances) {
     const engine = this.getCurrentEngine();
     if (!engine) {
@@ -221,94 +855,6 @@ class MLService {
     return engine.detectAnomalies(deviceList);
   }
 
-  // Safe energy forecast with fallback
-  getEnergyForecast(appliances, hours = 12) {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      console.warn('⚠️ No ML engine available for energy forecast');
-      return { 
-        success: false, 
-        forecast: [], 
-        totalExpectedEnergy: 0, 
-        totalExpectedCost: 0 
-      };
-    }
-    
-    if (engine.getEnergyForecast) {
-      const deviceList = Array.isArray(appliances) ? appliances : [];
-      return engine.getEnergyForecast(deviceList, hours);
-    } else {
-      console.warn('getEnergyForecast not available, returning default');
-      return { 
-        success: false, 
-        forecast: [], 
-        totalExpectedEnergy: 0, 
-        totalExpectedCost: 0 
-      };
-    }
-  }
-
-  // Safe metrics with fallback
-  getModelMetrics() {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      console.warn('⚠️ No ML engine available for metrics');
-      return { 
-        success: false, 
-        error: 'ML Engine not available',
-        userId: this.currentUserId 
-      };
-    }
-    
-    try {
-      const metrics = engine.getModelMetrics();
-      return { success: true, ...metrics, userId: this.currentUserId };
-    } catch (error) {
-      console.error('Error getting model metrics:', error);
-      return { success: false, error: error.message, userId: this.currentUserId };
-    }
-  }
-
-  // Safe training progress with fallback
-  getTrainingProgress() {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      console.warn('⚠️ No ML engine available for training progress');
-      return { 
-        progress: 0, 
-        status: 'not_initialized', 
-        current: 0,
-        required: 50,
-        canTrain: false,
-        userId: this.currentUserId,
-        simulation: { enabled: this.simulationEnabled }
-      };
-    }
-    
-    const current = engine.trainingData.deviceUsage.length;
-    const required = this.simulationEnabled ? 
-      Math.max(20, engine.config.minDataPoints * 0.5) : 
-      engine.config.minDataPoints;
-      
-    const progress = Math.min(100, (current / required) * 100);
-    
-    return {
-      progress: Math.round(progress),
-      current,
-      required,
-      status: progress >= 100 ? 'ready' : 'collecting',
-      canTrain: current >= required,
-      userId: this.currentUserId,
-      simulation: {
-        enabled: this.simulationEnabled,
-        isSimulating: this.isSimulating,
-        simulatedSamples: current,
-        simulatedDays: Math.floor(current / 24),
-      },
-    };
-  }
-
-  // Safe insights with fallback (FIXED)
   getMLInsights(appliances) {
     const engine = this.getCurrentEngine();
     if (!engine) {
@@ -348,18 +894,13 @@ class MLService {
     return this.currentUserId === userId && this.initialized && this.currentEngine;
   }
 
-  // Get current user ID
   getCurrentUserId() {
     return this.currentUserId;
   }
 
-  // Check if any user is set
   hasCurrentUser() {
     return !!this.currentUserId && !!this.currentEngine;
   }
-
-  // The rest of your existing methods remain the same but updated to use getCurrentEngine()
-  // ... (initializeSimulation, startSimulation, fastForwardSimulation, etc.)
 
   initializeSimulation(appliances) {
     if (!this.simulationEnabled) return { success: false, error: 'Simulation not enabled' };
@@ -368,7 +909,7 @@ class MLService {
     if (!engine) return { success: false, error: 'ML Engine not available' };
     
     this.currentAppliances = Array.isArray(appliances) ? appliances : [];
-    console.log('🎮 Simulation initialized for ML training');
+    console.log('🎮 Day-based simulation initialized for ML training');
     return { 
       success: true, 
       simulatedAppliances: this.currentAppliances, 
@@ -376,75 +917,18 @@ class MLService {
     };
   }
 
-  async startSimulation(speed = 24, onUpdate = null) {
-    if (!this.simulationEnabled) return { success: false, error: 'Simulation not enabled' };
-    if (!this.hasCurrentUser()) return { success: false, error: 'No user selected for simulation' };
-    
-    this.isSimulating = true;
-    console.log(`🚀 ML Simulation started at ${speed}x speed for user: ${this.currentUserId}`);
-    
-    this.simulationInterval = setInterval(() => {
-      if (this.currentAppliances.length > 0 && this.isSimulating) {
-        this.collectData(this.currentAppliances);
-        if (onUpdate) {
-          onUpdate({
-            samples: this.currentEngine.trainingData.deviceUsage.length,
-            progress: this.getTrainingProgress().progress
-          });
-        }
-      }
-    }, 1000);
+  getSimulationStatus() {
+    const engine = this.getCurrentEngine();
+    const days = engine?.trainingData?.dayPatterns?.length || 0;
+    const samples = engine?.trainingData?.deviceUsage?.length || 0;
     
     return { 
-      success: true, 
-      simulatedAppliances: this.currentAppliances, 
-      status: { enabled: true, isSimulating: true } 
-    };
-  }
-
-  async fastForwardSimulation(days = 7, onProgress = null) {
-    if (!this.simulationEnabled) return { success: false, error: 'Simulation not enabled' };
-    if (!this.hasCurrentUser()) return { success: false, error: 'No user selected for simulation' };
-    
-    console.log(`⏩ ML Fast-forwarding ${days} days for training data...`);
-    
-    const totalSamples = days * 24;
-    let samplesGenerated = 0;
-    
-    for (let day = 0; day < days; day++) {
-      const dayData = this.generateSimulatedData(1, day);
-      
-      await this.injectSimulationData({
-        deviceUsage: dayData,
-        userActions: this.generateSimulatedUserActions(day),
-        totalSamples: dayData.length,
-        simulatedDays: day + 1
-      });
-      
-      samplesGenerated += dayData.length;
-      
-      if (onProgress) {
-        onProgress({
-          day: day + 1,
-          totalDays: days,
-          samples: samplesGenerated,
-          progress: Math.round(((day + 1) / days) * 100)
-        });
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    if (this.currentEngine.trainingData.deviceUsage.length >= this.currentEngine.config.minDataPoints) {
-      console.log('🎓 Auto-training with simulated data...');
-      await this.trainModels();
-    }
-    
-    return { 
-      success: true, 
-      samplesGenerated, 
-      simulatedDays: days, 
-      status: this.getSimulationStatus() 
+      enabled: this.simulationEnabled, 
+      isSimulating: this.isSimulating,
+      simulatedDays: days,
+      simulatedSamples: samples,
+      samplingMode: 'daily',
+      userId: this.currentUserId
     };
   }
 
@@ -476,8 +960,8 @@ class MLService {
     }
     try {
       const deviceList = Array.isArray(appliances) ? appliances : [];
-      await engine.collectDeviceData(deviceList);
-      console.log('📊 Force collected current device data');
+      await engine.collectDayPattern(deviceList);
+      console.log('📊 Force collected current day pattern');
     } catch (error) { 
       console.error('Error in force collection:', error); 
     }
@@ -517,70 +1001,6 @@ class MLService {
     }
   }
 
-  getAllPredictions(appliances, horizon = 24) {
-    return this.getPredictions(appliances, horizon);
-  }
-
-  async exportTrainingData() {
-    const engine = this.getCurrentEngine();
-    if (!engine) return { success: false, error: 'ML Engine not available' };
-    
-    try {
-      const data = {
-        deviceUsage: engine.trainingData.deviceUsage,
-        userActions: engine.trainingData.userActions,
-        exportTimestamp: Date.now(),
-        totalSamples: engine.trainingData.deviceUsage.length,
-        simulationEnabled: this.simulationEnabled,
-        userId: this.currentUserId,
-      };
-      return { 
-        success: true, 
-        data, 
-        filename: `ml_training_data_${this.currentUserId}_${Date.now()}.json` 
-      };
-    } catch (error) {
-      console.error('Error exporting training data:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async importTrainingData(importData) {
-    const engine = this.getCurrentEngine();
-    if (!engine) return { success: false, error: 'ML Engine not available' };
-    
-    try {
-      if (!importData.deviceUsage || !Array.isArray(importData.deviceUsage)) {
-        return { success: false, error: 'Invalid import data format' };
-      }
-      engine.trainingData.deviceUsage = importData.deviceUsage;
-      engine.trainingData.userActions = importData.userActions || [];
-      await engine.saveTrainingData();
-      console.log(`📥 Imported ${importData.deviceUsage.length} training samples`);
-      return { 
-        success: true, 
-        samplesImported: importData.deviceUsage.length, 
-        actionsImported: engine.trainingData.userActions.length 
-      };
-    } catch (error) {
-      console.error('Error importing training data:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  getSimulationStatus() {
-    const engine = this.getCurrentEngine();
-    const samples = engine ? engine.trainingData.deviceUsage.length : 0;
-    
-    return { 
-      enabled: this.simulationEnabled, 
-      isSimulating: this.isSimulating,
-      simulatedDays: Math.floor(samples / 24),
-      simulatedSamples: samples,
-      userId: this.currentUserId
-    };
-  }
-
   updateAppliances(appliances) {
     this.currentAppliances = Array.isArray(appliances) ? appliances : [];
     if (this.simulationEnabled && this.currentAppliances.length > 0) {
@@ -596,7 +1016,7 @@ class MLService {
         this.collectData(this.currentAppliances);
       }
     }, this.config.autoCollectInterval);
-    console.log(`🔄 Background data collection started (${this.config.autoCollectInterval}ms interval)`);
+    console.log(`🔄 Background day pattern collection started (${this.config.autoCollectInterval}ms interval)`);
   }
 
   stopBackgroundCollection() {
@@ -605,147 +1025,6 @@ class MLService {
       this.dataCollectionInterval = null;
       console.log('🛑 Background data collection stopped');
     }
-  }
-
-  generateSimulatedData(days, dayOffset = 0) {
-    const data = [];
-    const now = new Date();
-    
-    for (let day = 0; day < days; day++) {
-      for (let hour = 0; hour < 24; hour++) {
-        const timestamp = new Date(now);
-        timestamp.setDate(now.getDate() - days + day + dayOffset);
-        timestamp.setHours(hour, 0, 0, 0);
-        
-        const isDaytime = hour >= 7 && hour <= 22;
-        const isPeakTime = (hour >= 17 && hour <= 21) || (hour >= 7 && hour <= 9);
-        const baseProbability = isDaytime ? 0.6 : 0.3;
-        const peakMultiplier = isPeakTime ? 1.3 : 1.0;
-        
-        data.push({
-          timestamp: timestamp.toISOString(),
-          hour,
-          dayOfWeek: timestamp.getDay(),
-          isWeekend: timestamp.getDay() === 0 || timestamp.getDay() === 6,
-          devices: this.currentAppliances.map(app => {
-            const deviceProbability = baseProbability * peakMultiplier;
-            const isActive = Math.random() < deviceProbability;
-            return {
-              id: app.id,
-              type: app.type,
-              room: app.room,
-              status: isActive ? 'on' : 'off',
-              power: app.normal_usage || 0,
-              isActive,
-            };
-          }),
-          totalPower: this.currentAppliances
-            .filter(() => Math.random() < baseProbability * peakMultiplier)
-            .reduce((sum, app) => sum + (app.normal_usage || 0), 0),
-          activeDeviceCount: Math.floor(Math.random() * this.currentAppliances.length * baseProbability * peakMultiplier),
-        });
-      }
-    }
-    
-    return data;
-  }
-
-  generateSimulatedUserActions(dayOffset = 0) {
-    const actions = [];
-    const now = new Date();
-    
-    const actionsPerDay = Math.floor(Math.random() * 10) + 5;
-    
-    for (let i = 0; i < actionsPerDay; i++) {
-      const timestamp = new Date(now);
-      timestamp.setDate(now.getDate() - dayOffset);
-      timestamp.setHours(Math.floor(Math.random() * 24), Math.floor(Math.random() * 60), 0, 0);
-      
-      if (this.currentAppliances.length > 0) {
-        const randomDevice = this.currentAppliances[Math.floor(Math.random() * this.currentAppliances.length)];
-        const actionType = Math.random() > 0.5 ? 'toggle_on' : 'toggle_off';
-        
-        actions.push({
-          timestamp: timestamp.toISOString(),
-          hour: timestamp.getHours(),
-          dayOfWeek: timestamp.getDay(),
-          deviceId: randomDevice.id,
-          deviceType: randomDevice.type,
-          action: actionType,
-        });
-      }
-    }
-    
-    return actions;
-  }
-
-  async quickSimulate(days = 1) {
-    if (!this.hasCurrentUser()) return { success: false, error: 'No user selected for simulation' };
-    
-    console.log(`⚡ Quick simulating ${days} days...`);
-    const result = await this.fastForwardSimulation(days);
-    
-    if (result.success) {
-      console.log(`✅ Quick simulation complete: ${result.samplesGenerated} samples`);
-      return result;
-    } else {
-      console.error('❌ Quick simulation failed:', result.error);
-      return result;
-    }
-  }
-
-  // NEW: Clear all user data for testing
-  async clearUserData() {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      return { success: false, error: 'ML Engine not available' };
-    }
-    
-    try {
-      console.log('🗑️ Clearing all ML training data...');
-      
-      // Clear engine data
-      engine.trainingData = {
-        deviceUsage: [],
-        userActions: [],
-        contextData: [],
-        costData: [],
-      };
-      
-      // Reset models
-      engine.models = {
-        usagePatterns: null,
-        userBehavior: null,
-        costOptimization: null,
-        anomalyDetection: null,
-      };
-      
-      // Reset metrics
-      engine.metrics = {
-        accuracy: 0,
-        lastTrainedAt: null,
-        predictionsMade: 0,
-        correctPredictions: 0,
-        userId: this.currentUserId,
-      };
-      
-      // Clear AsyncStorage
-      await AsyncStorage.multiRemove([engine.storageKey, engine.dataKey, engine.settingsKey]);
-      
-      console.log('✅ All ML data cleared successfully');
-      return { success: true, message: 'All training data cleared' };
-    } catch (error) {
-      console.error('Error clearing data:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // NEW: Reset everything for testing
-  async resetMLForTesting() {
-    await this.clearUserData();
-    // Reinitialize with clean state
-    await this.initialize();
-    return { success: true, message: 'ML reset for testing' };
   }
 }
 
