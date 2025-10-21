@@ -117,7 +117,8 @@ class MLService {
     }
     
     try {
-      await engine.collectDeviceData(appliances);
+      const deviceList = Array.isArray(appliances) ? appliances : [];
+      await engine.collectDeviceData(deviceList);
       
       const min = this.simulationEnabled ? 
         Math.max(20, engine.config.minDataPoints * 0.3) : 
@@ -175,7 +176,8 @@ class MLService {
     }
     
     try {
-      const predictions = engine.getPredictions(appliances);
+      const deviceList = Array.isArray(appliances) ? appliances : [];
+      const predictions = engine.getPredictions(deviceList);
       const confidence = engine.getPredictionConfidence ? 
         engine.getPredictionConfidence() : 0;
       
@@ -204,7 +206,8 @@ class MLService {
       console.warn('⚠️ No ML engine available for recommendations');
       return [];
     }
-    return engine.getRecommendations(appliances);
+    const deviceList = Array.isArray(appliances) ? appliances : [];
+    return engine.getRecommendations(deviceList);
   }
 
   // Safe anomaly detection with fallback
@@ -214,7 +217,8 @@ class MLService {
       console.warn('⚠️ No ML engine available for anomaly detection');
       return { hasAnomaly: false, anomalies: [] };
     }
-    return engine.detectAnomalies(appliances);
+    const deviceList = Array.isArray(appliances) ? appliances : [];
+    return engine.detectAnomalies(deviceList);
   }
 
   // Safe energy forecast with fallback
@@ -231,7 +235,8 @@ class MLService {
     }
     
     if (engine.getEnergyForecast) {
-      return engine.getEnergyForecast(appliances, hours);
+      const deviceList = Array.isArray(appliances) ? appliances : [];
+      return engine.getEnergyForecast(deviceList, hours);
     } else {
       console.warn('getEnergyForecast not available, returning default');
       return { 
@@ -303,7 +308,7 @@ class MLService {
     };
   }
 
-  // Safe insights with fallback
+  // Safe insights with fallback (FIXED)
   getMLInsights(appliances) {
     const engine = this.getCurrentEngine();
     if (!engine) {
@@ -313,12 +318,16 @@ class MLService {
         message: 'ML Service not available', 
         dataProgress: 0, 
         simulation: this.getSimulationStatus(),
-        userId: this.currentUserId
+        userId: this.currentUserId,
+        predictions: [],
+        recommendations: [],
+        anomalies: { hasAnomaly: false, anomalies: [] },
       };
     }
     
     try {
-      const insights = engine.getMLInsights(appliances);
+      const deviceList = Array.isArray(appliances) ? appliances : (Array.isArray(this.currentAppliances) ? this.currentAppliances : []);
+      const insights = engine.getMLInsights(deviceList);
       return { ...insights, simulation: this.getSimulationStatus() };
     } catch (error) {
       console.error('Error getting insights:', error);
@@ -326,7 +335,10 @@ class MLService {
         ready: false, 
         error: error.message, 
         simulation: this.getSimulationStatus(),
-        userId: this.currentUserId
+        userId: this.currentUserId,
+        predictions: [],
+        recommendations: [],
+        anomalies: { hasAnomaly: false, anomalies: [] },
       };
     }
   }
@@ -355,11 +367,11 @@ class MLService {
     const engine = this.getCurrentEngine();
     if (!engine) return { success: false, error: 'ML Engine not available' };
     
-    this.currentAppliances = appliances;
+    this.currentAppliances = Array.isArray(appliances) ? appliances : [];
     console.log('🎮 Simulation initialized for ML training');
     return { 
       success: true, 
-      simulatedAppliances: appliances, 
+      simulatedAppliances: this.currentAppliances, 
       status: { enabled: true, isSimulating: false } 
     };
   }
@@ -463,7 +475,8 @@ class MLService {
       return; 
     }
     try {
-      await engine.collectDeviceData(appliances);
+      const deviceList = Array.isArray(appliances) ? appliances : [];
+      await engine.collectDeviceData(deviceList);
       console.log('📊 Force collected current device data');
     } catch (error) { 
       console.error('Error in force collection:', error); 
@@ -569,11 +582,11 @@ class MLService {
   }
 
   updateAppliances(appliances) {
-    this.currentAppliances = appliances;
-    if (this.simulationEnabled && appliances.length > 0) {
-      this.initializeSimulation(appliances);
+    this.currentAppliances = Array.isArray(appliances) ? appliances : [];
+    if (this.simulationEnabled && this.currentAppliances.length > 0) {
+      this.initializeSimulation(this.currentAppliances);
     }
-    console.log(`📝 Updated appliances list: ${appliances.length} devices`);
+    console.log(`📝 Updated appliances list: ${this.currentAppliances.length} devices`);
   }
 
   startBackgroundCollection() {
@@ -622,13 +635,13 @@ class MLService {
               type: app.type,
               room: app.room,
               status: isActive ? 'on' : 'off',
-              power: app.normal_usage,
+              power: app.normal_usage || 0,
               isActive,
             };
           }),
           totalPower: this.currentAppliances
             .filter(() => Math.random() < baseProbability * peakMultiplier)
-            .reduce((sum, app) => sum + app.normal_usage, 0),
+            .reduce((sum, app) => sum + (app.normal_usage || 0), 0),
           activeDeviceCount: Math.floor(Math.random() * this.currentAppliances.length * baseProbability * peakMultiplier),
         });
       }

@@ -1,4 +1,4 @@
-// ControlsTab.js - Complete updated version with MaterialIcons and ML Features
+// ControlsTab.js - Cleaned version without Mock API
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -8,13 +8,11 @@ import {
   SafeAreaView,
   ScrollView,
   Alert,
-  Switch,
   Dimensions,
   Modal,
   TextInput,
   RefreshControl,
   ActivityIndicator,
-  Animated,
   Vibration,
   FlatList,
   KeyboardAvoidingView,
@@ -26,14 +24,11 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../context/AuthContext';
 import { styles } from './styles/ControlStyles';
-import MockSmartHomeAPI from '../utils/MockSmartHomeAPI';
 import mlService from '../MLEngine/MLService';
 
 const { width } = Dimensions.get('window');
-const cardWidth = (width - 48) / 2;
 
 const FAVORITES_STORAGE_KEY = '@device_favorites';
-const MOCK_API_KEY = '@mock_api_devices';
 
 export default function ControlsTab() {
   const { user, supabase } = useAuth();
@@ -66,26 +61,17 @@ export default function ControlsTab() {
   const [viewMode, setViewMode] = useState('grid');
   const [showFilters, setShowFilters] = useState(false);
   const [togglingDevices, setTogglingDevices] = useState(new Set());
-  const [connectionStatus, setConnectionStatus] = useState({});
-  const [deviceDiagnostics, setDeviceDiagnostics] = useState({});
   
   // ML Features
   const [mlRecommendations, setMLRecommendations] = useState([]);
   const [showMLInsights, setShowMLInsights] = useState(false);
 
-  // Initialize Mock API
-  const [mockAPI] = useState(() => new MockSmartHomeAPI({
-    networkDelay: { min: 200, max: 800 },
-    failureRate: 0.03,
-  }));
-
   // Get unique rooms from appliances
   const rooms = [...new Set(appliances.map(app => app.room))].sort();
 
-  // Load favorites and initialize mock devices
+  // Load favorites and initialize ML service
   useEffect(() => {
     loadFavorites();
-    initializeMockDevices();
     initializeMLService();
   }, []);
 
@@ -115,29 +101,6 @@ export default function ControlsTab() {
       setMLRecommendations(recs.slice(0, 3)); // Show top 3
     } catch (error) {
       console.error('Error getting ML recommendations:', error);
-    }
-  };
-
-  const initializeMockDevices = async () => {
-    try {
-      const stored = await AsyncStorage.getItem(MOCK_API_KEY);
-      if (stored) {
-        const mockDevices = JSON.parse(stored);
-        mockDevices.forEach(device => {
-          mockAPI.devices.set(device.id, device);
-        });
-      }
-    } catch (error) {
-      console.error('Error initializing mock devices:', error);
-    }
-  };
-
-  const saveMockDevices = async () => {
-    try {
-      const devices = Array.from(mockAPI.devices.values());
-      await AsyncStorage.setItem(MOCK_API_KEY, JSON.stringify(devices));
-    } catch (error) {
-      console.error('Error saving mock devices:', error);
     }
   };
 
@@ -186,7 +149,7 @@ export default function ControlsTab() {
         case 'name':
           return a.name.localeCompare(b.name);
         case 'usage':
-          return (b.current_power || b.normal_usage) - (a.current_power || a.normal_usage);
+          return b.normal_usage - a.normal_usage;
         case 'room':
           return a.room.localeCompare(b.room);
         case 'status':
@@ -221,7 +184,7 @@ export default function ControlsTab() {
   };
 
   const getEnergyInsight = (appliance) => {
-    const power = appliance.current_power || appliance.normal_usage;
+    const power = appliance.normal_usage;
     
     if (power > 500) {
       return { 
@@ -244,28 +207,7 @@ export default function ControlsTab() {
     };
   };
 
-  // Device registration with Mock API
-  const registerDeviceWithMockAPI = async (appliance) => {
-    try {
-      const response = await mockAPI.registerDevice({
-        id: appliance.id,
-        name: appliance.name,
-        type: appliance.type,
-        ratedPower: parseInt(appliance.normal_usage) || 100,
-        status: appliance.status || 'off',
-      });
-
-      if (response.success) {
-        await saveMockDevices();
-        return response.data;
-      }
-    } catch (error) {
-      console.error('Error registering device with mock API:', error);
-    }
-    return null;
-  };
-
-  // Enhanced toggle with Mock API simulation and ML tracking
+  // Simple toggle with ML tracking
   const toggleAppliance = async (applianceId, currentStatus) => {
     const newStatus = currentStatus === 'on' ? 'off' : 'on';
     
@@ -284,84 +226,41 @@ export default function ControlsTab() {
         }
       );
 
-      // Try Mock API first for realistic simulation
-      const apiResponse = await mockAPI.toggleDevice(applianceId, newStatus);
+      // Update Supabase
+      const { error } = await supabase
+        .from('appliances')
+        .update({ status: newStatus })
+        .eq('id', applianceId);
+
+      if (error) throw error;
+
+      // Update local state
+      const updatedAppliances = appliances.map(app =>
+        app.id === applianceId ? { ...app, status: newStatus } : app
+      );
+      setAppliances(updatedAppliances);
+      calculateStats(updatedAppliances);
       
-      if (apiResponse.success) {
-        // Update local state with API response
-        const updatedAppliances = appliances.map(app =>
-          app.id === applianceId ? { 
-            ...app, 
-            status: apiResponse.data.status,
-            current_power: apiResponse.data.power || app.normal_usage
-          } : app
-        );
+      // Update ML recommendations after toggle
+      await updateMLRecommendations();
+      
+      Vibration.vibrate(100);
         
-        setAppliances(updatedAppliances);
-        calculateStats(updatedAppliances);
-        
-        // Update ML recommendations after toggle
-        await updateMLRecommendations();
-        
-        // Update Supabase for persistence
-        const { error } = await supabase
-          .from('appliances')
-          .update({ status: newStatus })
-          .eq('id', applianceId);
-
-        if (error) {
-          console.warn('Supabase update failed, but mock API succeeded:', error);
-        }
-
-        Vibration.vibrate(100);
-        setConnectionStatus(prev => ({
-          ...prev,
-          [applianceId]: 'connected'
-        }));
-        
-      } else {
-        throw new Error(apiResponse.error || 'Device control failed');
-      }
     } catch (error) {
-      console.error('Mock API toggle failed, falling back to direct update:', error);
+      console.error('Error toggling appliance:', error);
+      Vibration.vibrate(200);
       
-      // Fallback to direct update
-      try {
-        const { error } = await supabase
-          .from('appliances')
-          .update({ status: newStatus })
-          .eq('id', applianceId);
-
-        if (error) throw error;
-
-        const updatedAppliances = appliances.map(app =>
-          app.id === applianceId ? { ...app, status: newStatus } : app
-        );
-        setAppliances(updatedAppliances);
-        calculateStats(updatedAppliances);
-        Vibration.vibrate(100);
-        
-      } catch (fallbackError) {
-        console.error('Fallback update also failed:', fallbackError);
-        Vibration.vibrate(200);
-        setConnectionStatus(prev => ({
-          ...prev,
-          [applianceId]: 'error'
-        }));
-        
-        Alert.alert(
-          'Connection Error',
-          'Failed to update device status. Please check your connection.',
-          [
-            { text: 'OK', style: 'default' },
-            { 
-              text: 'Retry', 
-              onPress: () => toggleAppliance(applianceId, currentStatus) 
-            }
-          ]
-        );
-        return;
-      }
+      Alert.alert(
+        'Connection Error',
+        'Failed to update device status. Please check your connection.',
+        [
+          { text: 'OK', style: 'default' },
+          { 
+            text: 'Retry', 
+            onPress: () => toggleAppliance(applianceId, currentStatus) 
+          }
+        ]
+      );
     } finally {
       setTogglingDevices(prev => {
         const newSet = new Set(prev);
@@ -371,47 +270,7 @@ export default function ControlsTab() {
     }
   };
 
-  // Enhanced device status checking
-  const checkDeviceStatus = async (appliance) => {
-    try {
-      const statusResponse = await mockAPI.getDeviceStatus(appliance.id);
-      
-      if (statusResponse.success) {
-        const deviceStatus = statusResponse.data;
-        
-        setConnectionStatus(prev => ({
-          ...prev,
-          [appliance.id]: deviceStatus.isOnline ? 'connected' : 'error'
-        }));
-
-        // Get current power data
-        const powerResponse = await mockAPI.getCurrentPower(appliance.id);
-        let currentPower = appliance.normal_usage;
-        if (powerResponse.success) {
-          currentPower = powerResponse.data.power;
-        }
-
-        return {
-          ...appliance,
-          status: deviceStatus.status,
-          isOnline: deviceStatus.isOnline,
-          lastSeen: deviceStatus.lastSeen,
-          current_power: currentPower,
-          rssi: deviceStatus.rssi,
-        };
-      }
-    } catch (error) {
-      console.error(`Error checking status for ${appliance.name}:`, error);
-      setConnectionStatus(prev => ({
-        ...prev,
-        [appliance.id]: 'error'
-      }));
-    }
-    
-    return appliance;
-  };
-
-  // Enhanced energy saving mode with Mock API
+  // Energy saving mode
   const toggleEnergySavingMode = async () => {
     const newMode = !energySavingMode;
     setEnergySavingMode(newMode);
@@ -435,44 +294,26 @@ export default function ControlsTab() {
               text: 'Turn Off & Save',
               onPress: async () => {
                 try {
-                  // Use Mock API for realistic simulation
-                  const togglePromises = highUsageAppliances.map(app =>
-                    mockAPI.toggleDevice(app.id, 'off')
-                  );
-                  
-                  const results = await Promise.allSettled(togglePromises);
-                  
-                  const updatedAppliances = appliances.map(app => {
-                    const highUsageApp = highUsageAppliances.find(h => h.id === app.id);
-                    if (highUsageApp) {
-                      const resultIndex = highUsageAppliances.findIndex(h => h.id === app.id);
-                      const result = results[resultIndex];
-                      
-                      if (result.status === 'fulfilled' && result.value.success) {
-                        return { 
-                          ...app, 
-                          status: 'off',
-                          current_power: 0
-                        };
-                      }
-                    }
-                    return app;
-                  });
-                  
-                  setAppliances(updatedAppliances);
-                  calculateStats(updatedAppliances);
-                  
                   // Update Supabase
                   const { error } = await supabase
                     .from('appliances')
                     .update({ status: 'off' })
                     .in('id', highUsageAppliances.map(app => app.id));
 
-                  if (!error) {
-                    Vibration.vibrate(100);
-                  }
+                  if (error) throw error;
+
+                  // Update local state
+                  const updatedAppliances = appliances.map(app => {
+                    const highUsageApp = highUsageAppliances.find(h => h.id === app.id);
+                    return highUsageApp ? { ...app, status: 'off' } : app;
+                  });
+                  
+                  setAppliances(updatedAppliances);
+                  calculateStats(updatedAppliances);
+                  Vibration.vibrate(100);
                 } catch (error) {
                   console.error('Error in energy saving mode:', error);
+                  Alert.alert('Error', 'Failed to update some devices');
                 }
               }
             }
@@ -495,7 +336,7 @@ export default function ControlsTab() {
     Vibration.vibrate(50);
   };
 
-  // Enhanced room controls with Mock API
+  // Room controls
   const toggleRoomDevices = async (room, status) => {
     const roomDevices = appliances.filter(app => app.room === room);
     const deviceIds = roomDevices.map(app => app.id);
@@ -503,43 +344,21 @@ export default function ControlsTab() {
     if (deviceIds.length === 0) return;
 
     try {
-      // Update all devices in parallel using Mock API
-      const togglePromises = deviceIds.map(deviceId => 
-        mockAPI.toggleDevice(deviceId, status)
-      );
-      
-      const results = await Promise.allSettled(togglePromises);
-      
-      // Update local state for successful toggles
-      const updatedAppliances = appliances.map(app => {
-        if (deviceIds.includes(app.id)) {
-          const resultIndex = deviceIds.indexOf(app.id);
-          const result = results[resultIndex];
-          
-          if (result.status === 'fulfilled' && result.value.success) {
-            return { 
-              ...app, 
-              status: result.value.data.status,
-              current_power: result.value.data.power || 0
-            };
-          }
-        }
-        return app;
-      });
-      
-      setAppliances(updatedAppliances);
-      calculateStats(updatedAppliances);
-      
-      // Also update Supabase
+      // Update Supabase
       const { error } = await supabase
         .from('appliances')
         .update({ status })
         .in('id', deviceIds);
 
-      if (error) {
-        console.warn('Some Supabase updates failed:', error);
-      }
+      if (error) throw error;
+
+      // Update local state
+      const updatedAppliances = appliances.map(app => 
+        deviceIds.includes(app.id) ? { ...app, status } : app
+      );
       
+      setAppliances(updatedAppliances);
+      calculateStats(updatedAppliances);
       Vibration.vibrate(100);
     } catch (error) {
       console.error('Error toggling room devices:', error);
@@ -547,19 +366,18 @@ export default function ControlsTab() {
     }
   };
 
-  // Enhanced stats calculation with real-time power data
+  // Stats calculation
   const calculateStats = (applianceList) => {
     const activeAppliances = applianceList.filter(app => app.status === 'on');
     
-    // Use current_power if available, otherwise use normal_usage
     const totalUsage = activeAppliances.reduce((sum, app) => 
-      sum + (app.current_power || app.normal_usage), 0
+      sum + app.normal_usage, 0
     );
 
     // Calculate realistic monthly cost
     let monthlyCost = 0;
     activeAppliances.forEach(app => {
-      const kWh = (app.current_power || app.normal_usage) / 1000;
+      const kWh = app.normal_usage / 1000;
       const hoursPerDay = app.average_hours_per_day || 8;
       const daysPerMonth = 30;
       const monthlyKwh = kWh * hoursPerDay * daysPerMonth;
@@ -568,7 +386,7 @@ export default function ControlsTab() {
 
     let efficiency = 'Excellent';
     const highUsageActive = activeAppliances.filter(app => 
-      (app.current_power || app.normal_usage) > 300
+      app.normal_usage > 300
     ).length;
     
     if (highUsageActive > 2) efficiency = 'Poor';
@@ -583,7 +401,7 @@ export default function ControlsTab() {
     });
   };
 
-  // Enhanced fetch with real-time status updates
+  // Fetch appliances
   const fetchAppliances = useCallback(async () => {
     if (!user?.id) return;
 
@@ -595,26 +413,10 @@ export default function ControlsTab() {
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('Error fetching appliances:', error);
-        throw error;
-      }
+      if (error) throw error;
 
-      // Enhance appliances with real-time data from Mock API
-      const enhancedAppliances = await Promise.all(
-        (data || []).map(async (appliance) => {
-          // Register device with mock API if not already registered
-          if (!mockAPI.devices.has(appliance.id)) {
-            await registerDeviceWithMockAPI(appliance);
-          }
-          
-          // Get current status from mock API
-          return await checkDeviceStatus(appliance);
-        })
-      );
-
-      setAppliances(enhancedAppliances);
-      calculateStats(enhancedAppliances);
+      setAppliances(data || []);
+      calculateStats(data || []);
       
     } catch (error) {
       console.error('Error in fetchAppliances:', error);
@@ -638,16 +440,12 @@ export default function ControlsTab() {
   }, [fetchAppliances]);
 
   useEffect(() => {
-    const loadData = async () => {
-      await fetchAppliances();
-    };
-    
     if (user?.id) {
-      loadData();
+      fetchAppliances();
     }
   }, [user?.id, fetchAppliances]);
 
-  // Enhanced add appliance with Mock API registration
+  // Add appliance
   const addAppliance = async () => {
     if (!newAppliance.name || !newAppliance.type || !newAppliance.room || !newAppliance.normal_usage) {
       Alert.alert('Error', 'Please fill all required fields');
@@ -679,20 +477,8 @@ export default function ControlsTab() {
       if (error) throw error;
 
       const newDevice = data[0];
-      
-      // Register with Mock API
-      const mockDevice = await registerDeviceWithMockAPI(newDevice);
-      
-      // Add to local state with enhanced data
-      const enhancedDevice = {
-        ...newDevice,
-        isOnline: mockDevice?.isOnline !== false,
-        current_power: 0,
-        rssi: mockDevice?.rssi || -60,
-      };
-
-      setAppliances([...appliances, enhancedDevice]);
-      calculateStats([...appliances, enhancedDevice]);
+      setAppliances([...appliances, newDevice]);
+      calculateStats([...appliances, newDevice]);
       setNewAppliance({ name: '', type: '', room: '', normal_usage: '', average_hours_per_day: '8' });
       setShowAddModal(false);
       Vibration.vibrate(100);
@@ -776,10 +562,6 @@ export default function ControlsTab() {
                 saveFavorites(newFavorites);
               }
               
-              // Remove from mock API
-              mockAPI.devices.delete(applianceId);
-              await saveMockDevices();
-              
               Vibration.vibrate(100);
             } catch (error) {
               console.error('Error in deleteAppliance:', error);
@@ -796,49 +578,7 @@ export default function ControlsTab() {
     setShowEditModal(true);
   };
 
-  // Enhanced device diagnostics
-  const getDeviceDiagnostics = async (applianceId) => {
-    try {
-      const diagnostics = await mockAPI.getDiagnostics(applianceId);
-      if (diagnostics.success) {
-        setDeviceDiagnostics(prev => ({
-          ...prev,
-          [applianceId]: diagnostics.data
-        }));
-        
-        Alert.alert(
-          'Device Diagnostics',
-          `Health: ${diagnostics.data.health}\n` +
-          `Temperature: ${Math.round(diagnostics.data.temperature)}°C\n` +
-          `Uptime: ${Math.round(diagnostics.data.uptime / 3600)} hours\n` +
-          `WiFi Strength: ${diagnostics.data.wifiStrength} dBm\n` +
-          `Memory Usage: ${diagnostics.data.memoryUsage}%`
-        );
-      }
-    } catch (error) {
-      console.error('Error getting diagnostics:', error);
-      Alert.alert('Error', 'Failed to get device diagnostics');
-    }
-  };
-
-  // View energy history
-  const viewEnergyHistory = async (applianceId) => {
-    try {
-      const history = await mockAPI.getEnergyHistory(applianceId, { hours: 24 });
-      if (history.success) {
-        Alert.alert(
-          '24h Energy Usage',
-          `Total Energy: ${history.data.summary.totalEnergy} kWh\n` +
-          `Total Cost: R${history.data.summary.totalCost}\n` +
-          `Average Power: ${history.data.summary.avgPower}W`
-        );
-      }
-    } catch (error) {
-      console.error('Error getting energy history:', error);
-    }
-  };
-
-  // NEW: Render ML Insights Banner
+  // ML Insights Banner
   const renderMLInsightsBanner = () => {
     if (mlRecommendations.length === 0) return null;
 
@@ -900,7 +640,7 @@ export default function ControlsTab() {
     );
   };
 
-  // NEW: Smart automation suggestions
+  // Smart automation suggestions
   const renderSmartAutomation = (deviceId) => {
     const schedule = mlService.getSmartSchedule(deviceId, 1);
     
@@ -919,9 +659,8 @@ export default function ControlsTab() {
     );
   };
 
-  // Enhanced device card with ML predictions
+  // Device card rendering
   const renderDeviceCard = ({ item, index }) => {
-    // Validate required properties
     if (!item || !item.id || !item.name) {
       return (
         <View style={styles.errorCard}>
@@ -933,10 +672,8 @@ export default function ControlsTab() {
     try {
       const energyInsight = getEnergyInsight(item);
       const isToggling = togglingDevices.has(item.id);
-      const isConnected = connectionStatus[item.id] !== 'error' && item.isOnline !== false;
       const isFavorite = favorites.includes(item.id);
-      const currentPower = item.current_power || item.normal_usage || 0;
-      const diagnostics = deviceDiagnostics[item.id];
+      const currentPower = item.normal_usage || 0;
 
       // Get ML prediction for this device
       const allPredictions = mlService.getPredictions([item], 1);
@@ -948,18 +685,10 @@ export default function ControlsTab() {
       if (viewMode === 'list') {
         return (
           <TouchableOpacity 
-            style={[
-              styles.deviceListItem, 
-              !isConnected && styles.deviceOffline
-            ]}
+            style={styles.deviceListItem}
             onPress={() => toggleAppliance(item.id, item.status)}
             activeOpacity={0.7}
             disabled={isToggling}
-            accessible={true}
-            accessibilityLabel={`${item.name} in ${item.room}, ${item.status === 'on' ? 'currently on' : 'currently off'}, ${currentPower} watts`}
-            accessibilityHint="Double tap to toggle device power"
-            accessibilityRole="switch"
-            accessibilityState={{ checked: item.status === 'on', disabled: isToggling }}
           >
             <View style={styles.deviceListContent}>
               <View style={styles.deviceListLeft}>
@@ -973,7 +702,7 @@ export default function ControlsTab() {
                 <View style={styles.deviceListInfo}>
                   <Text style={styles.deviceListName}>{item.name}</Text>
                   <Text style={styles.deviceListRoom}>{item.room}</Text>
-                  <Text style={styles.deviceListUsage}>{currentPower}W • {item.status} {!isConnected && '• Offline'}</Text>
+                  <Text style={styles.deviceListUsage}>{currentPower}W • {item.status}</Text>
                   
                   {/* ML Prediction Badge */}
                   {hasPrediction && item.status === 'off' && prediction.prediction.willBeActive && (
@@ -984,19 +713,6 @@ export default function ControlsTab() {
                       </Text>
                     </View>
                   )}
-
-                  {diagnostics && (
-                    <View style={styles.diagnosticsRow}>
-                      <MaterialIcons name="wifi" size={10} color="#6b7280" />
-                      <Text style={styles.deviceListDiagnostics}>
-                        {diagnostics.wifiStrength}dBm • 
-                      </Text>
-                      <MaterialIcons name="thermostat" size={10} color="#6b7280" />
-                      <Text style={styles.deviceListDiagnostics}>
-                        {Math.round(diagnostics.temperature)}°C
-                      </Text>
-                    </View>
-                  )}
                 </View>
               </View>
               
@@ -1004,10 +720,6 @@ export default function ControlsTab() {
                 <TouchableOpacity 
                   onPress={(e) => toggleFavorite(item.id, e)}
                   style={styles.favoriteButton}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessible={true}
-                  accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-                  accessibilityRole="button"
                 >
                   <MaterialIcons 
                     name={isFavorite ? "star" : "star-border"} 
@@ -1021,11 +733,10 @@ export default function ControlsTab() {
                 ) : (
                   <View style={[
                     styles.statusIndicator,
-                    item.status === 'on' ? styles.statusOn : styles.statusOff,
-                    !isConnected && styles.statusError
-                  ]} accessible={true} accessibilityLabel={!isConnected ? 'Connection error' : `Status: ${item.status}`}>
+                    item.status === 'on' ? styles.statusOn : styles.statusOff
+                  ]}>
                     <Text style={styles.statusText}>
-                      {!isConnected ? '!' : item.status === 'on' ? 'ON' : 'OFF'}
+                      {item.status === 'on' ? 'ON' : 'OFF'}
                     </Text>
                   </View>
                 )}
@@ -1033,32 +744,10 @@ export default function ControlsTab() {
                 <TouchableOpacity 
                   onPress={() => openEditModal(item)}
                   style={styles.menuButton}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessible={true}
-                  accessibilityLabel="Edit device settings"
-                  accessibilityRole="button"
                 >
                   <MaterialIcons name="more-vert" size={20} color="#a1a1aa" />
                 </TouchableOpacity>
               </View>
-            </View>
-            
-            {/* Additional action buttons */}
-            <View style={styles.deviceActions}>
-              <TouchableOpacity 
-                style={styles.smallButton}
-                onPress={() => getDeviceDiagnostics(item.id)}
-              >
-                <MaterialIcons name="build" size={14} color="#a1a1aa" style={styles.smallButtonIcon} />
-                <Text style={styles.smallButtonText}>Diagnostics</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.smallButton}
-                onPress={() => viewEnergyHistory(item.id)}
-              >
-                <MaterialIcons name="show-chart" size={14} color="#a1a1aa" style={styles.smallButtonIcon} />
-                <Text style={styles.smallButtonText}>Energy History</Text>
-              </TouchableOpacity>
             </View>
 
             {/* Smart Automation */}
@@ -1070,18 +759,10 @@ export default function ControlsTab() {
       // Grid View
       return (
         <TouchableOpacity 
-          style={[
-            styles.deviceCard,
-            !isConnected && styles.deviceOffline
-          ]}
+          style={styles.deviceCard}
           onPress={() => toggleAppliance(item.id, item.status)}
           activeOpacity={0.7}
           disabled={isToggling}
-          accessible={true}
-          accessibilityLabel={`${item.name} in ${item.room}, ${item.status === 'on' ? 'currently on' : 'currently off'}, ${currentPower} watts`}
-          accessibilityHint="Double tap to toggle device power"
-          accessibilityRole="switch"
-          accessibilityState={{ checked: item.status === 'on', disabled: isToggling }}
         >
           <View style={styles.deviceHeader}>
             <View style={styles.deviceCardIcon}>
@@ -1092,14 +773,9 @@ export default function ControlsTab() {
               />
             </View>
             
-            {/* Favorite button moved to middle */}
             <TouchableOpacity 
               onPress={(e) => toggleFavorite(item.id, e)}
               style={styles.favoriteButton}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              accessible={true}
-              accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-              accessibilityRole="button"
             >
               <MaterialIcons 
                 name={isFavorite ? "star" : "star-border"} 
@@ -1107,14 +783,6 @@ export default function ControlsTab() {
                 color={isFavorite ? "#f59e0b" : "#a1a1aa"} 
               />
             </TouchableOpacity>
-            
-            <View style={styles.deviceHeaderRight}>
-              {!isConnected && (
-                <View style={styles.offlineIndicator} accessible={true} accessibilityLabel="Connection error">
-                  <MaterialIcons name="error-outline" size={12} color="#ffffff" />
-                </View>
-              )}
-            </View>
           </View>
           
           <Text style={styles.deviceCardName}>{item.name}</Text>
@@ -1137,7 +805,7 @@ export default function ControlsTab() {
               <View style={[
                 styles.statusIndicator,
                 item.status === 'on' ? styles.statusOn : styles.statusOff
-              ]} accessible={true} accessibilityLabel={`Status: ${item.status}`}>
+              ]}>
                 <Text style={styles.statusText}>
                   {item.status === 'on' ? 'ON' : 'OFF'}
                 </Text>
@@ -1155,10 +823,6 @@ export default function ControlsTab() {
           <TouchableOpacity 
             onPress={() => openEditModal(item)}
             style={styles.cardMenuButton}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            accessible={true}
-            accessibilityLabel="Edit device settings"
-            accessibilityRole="button"
           >
             <MaterialIcons name="more-vert" size={18} color="#a1a1aa" />
           </TouchableOpacity>
@@ -1186,24 +850,10 @@ export default function ControlsTab() {
             </TouchableOpacity>
           </View>
           
-          <ScrollView style={styles.filterContent}
-            showsVerticalScrollIndicator={false}
-            directionalLockEnabled={true}
-            scrollEventThrottle={16}
-            nestedScrollEnabled={false}
-            bounces={true}
-            alwaysBounceHorizontal={false}
-          >
+          <ScrollView style={styles.filterContent}>
             <View style={styles.filterSection}>
               <Text style={styles.filterSectionTitle}>Room</Text>
-              <ScrollView 
-                showsVerticalScrollIndicator={false}
-                directionalLockEnabled={true}
-                scrollEventThrottle={16}
-                nestedScrollEnabled={false}
-                bounces={true}
-                alwaysBounceHorizontal={false}
-              >
+              <View style={styles.filterRow}>
                 <TouchableOpacity
                   style={[styles.filterChip, filterRoom === 'all' && styles.filterChipActive]}
                   onPress={() => setFilterRoom('all')}
@@ -1219,7 +869,7 @@ export default function ControlsTab() {
                     <Text style={[styles.filterChipText, filterRoom === room && styles.filterChipTextActive]}>{room}</Text>
                   </TouchableOpacity>
                 ))}
-              </ScrollView>
+              </View>
             </View>
 
             <View style={styles.filterSection}>
@@ -1296,14 +946,7 @@ export default function ControlsTab() {
                 <Text style={styles.modalSave}>Save</Text>
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalContent}
-               showsVerticalScrollIndicator={false}
-                directionalLockEnabled={true}
-                scrollEventThrottle={16}
-                nestedScrollEnabled={false}
-                bounces={true}
-                alwaysBounceHorizontal={false}
-            >
+            <ScrollView style={styles.modalContent}>
               <View style={styles.modalForm}>
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Device Name *</Text>
@@ -1318,12 +961,7 @@ export default function ControlsTab() {
 
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Device Type *</Text>
-                  <ScrollView 
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      scrollEventThrottle={16}
-                      nestedScrollEnabled={false}
-                  >
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                     <View style={styles.typeSelector}>
                       {[
                         { key: 'refrigerator', label: 'Fridge', icon: 'kitchen' },
@@ -1437,15 +1075,7 @@ export default function ControlsTab() {
                 <Text style={styles.modalSave}>Save</Text>
               </TouchableOpacity>
             </View>
-            <ScrollView 
-              style={styles.modalContent}
-               showsVerticalScrollIndicator={false}
-                directionalLockEnabled={true}
-                scrollEventThrottle={16}
-                nestedScrollEnabled={false}
-                bounces={true}
-                alwaysBounceHorizontal={false}
-              >
+            <ScrollView style={styles.modalContent}>
               <View style={styles.modalForm}>
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Device Name *</Text>
@@ -1460,12 +1090,7 @@ export default function ControlsTab() {
 
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Device Type *</Text>
-                  <ScrollView 
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    scrollEventThrottle={16}
-                    nestedScrollEnabled={false}
-                  >
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                     <View style={styles.typeSelector}>
                       {[
                         { key: 'refrigerator', label: 'Fridge', icon: 'kitchen' },
@@ -1575,12 +1200,7 @@ export default function ControlsTab() {
     return (
       <View style={styles.roomControlsContainer}>
         <Text style={styles.sectionTitle}>Quick Room Controls</Text>
-        <ScrollView 
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            scrollEventThrottle={16}
-            nestedScrollEnabled={false}
-          >
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           {rooms.map(room => {
             const roomDevices = appliances.filter(app => app.room === room);
             const activeCount = roomDevices.filter(app => app.status === 'on').length;
@@ -1627,12 +1247,6 @@ export default function ControlsTab() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView 
-         showsVerticalScrollIndicator={false}
-          directionalLockEnabled={true}
-          scrollEventThrottle={16}
-          nestedScrollEnabled={false}
-          bounces={true}
-          alwaysBounceHorizontal={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
@@ -1674,13 +1288,7 @@ export default function ControlsTab() {
               
               <TouchableOpacity 
                 style={styles.controlButton}
-                onPress={() => {
-                  try {
-                    setViewMode(viewMode === 'grid' ? 'list' : 'grid');
-                  } catch (error) {
-                    console.error('Error toggling view mode:', error);
-                  }
-                }}
+                onPress={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
               >
                 <MaterialIcons 
                   name={viewMode === 'grid' ? 'view-list' : 'grid-view'} 
@@ -1734,7 +1342,7 @@ export default function ControlsTab() {
           </View>
         </View>
 
-        {/* NEW: ML Insights Banner */}
+        {/* ML Insights Banner */}
         {renderMLInsightsBanner()}
 
         <KeyboardAvoidingView
@@ -1775,12 +1383,7 @@ export default function ControlsTab() {
             <Text style={styles.sectionTitle}>
               <MaterialIcons name="star" size={18} color="#f59e0b" /> Favorites
             </Text>
-            <ScrollView 
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                scrollEventThrottle={16}
-                nestedScrollEnabled={false}
-            >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               {appliances.filter(app => favorites.includes(app.id)).map(item => (
                 <TouchableOpacity 
                   key={`fav-${item.id}`}
@@ -1832,28 +1435,12 @@ export default function ControlsTab() {
         ) : (
           <FlatList
             data={filteredAppliances}
-            renderItem={({ item, index }) => {
-              try {
-                return renderDeviceCard({ item, index });
-              } catch (error) {
-                console.error('Error rendering device card:', error);
-                return (
-                  <View style={styles.errorCard}>
-                    <Text style={styles.errorText}>Error loading device</Text>
-                  </View>
-                );
-              }
-            }}
+            renderItem={renderDeviceCard}
             keyExtractor={(item) => `device-${item.id}-${viewMode}`}
             numColumns={viewMode === 'grid' ? 2 : 1}
             scrollEnabled={false}
             contentContainerStyle={viewMode === 'grid' ? styles.deviceGrid : styles.deviceList}
             key={`${viewMode}-${filteredAppliances.length}`}
-            removeClippedSubviews={false}
-            initialNumToRender={10}
-            maxToRenderPerBatch={5}
-            updateCellsBatchingPeriod={100}
-            windowSize={10}
           />
         )}
 
@@ -1866,163 +1453,3 @@ export default function ControlsTab() {
     </SafeAreaView>
   );
 }
-
-// Add error handling styles
-const errorStyles = StyleSheet.create({
-  errorCard: {
-    flex: 1,
-    margin: 8,
-    padding: 16,
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#ef4444',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 120,
-  },
-  errorText: {
-    color: '#ef4444',
-    fontSize: 12,
-    textAlign: 'center',
-  },
-  // ML Insights Styles
-  mlBanner: {
-    backgroundColor: 'rgba(139, 92, 246, 0.1)',
-    borderRadius: 12,
-    padding: 16,
-    marginHorizontal: 24,
-    marginVertical: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(139, 92, 246, 0.3)',
-  },
-  mlBannerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  mlBannerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  mlBannerTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: 2,
-  },
-  mlBannerSubtitle: {
-    fontSize: 12,
-    color: '#a1a1aa',
-  },
-  mlBannerPreview: {
-    fontSize: 14,
-    color: '#d1d5db',
-    lineHeight: 20,
-  },
-  mlInsightsExpanded: {
-    marginTop: 12,
-    gap: 12,
-  },
-  mlInsightCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 8,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  mlInsightHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-  },
-  mlPriorityDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  mlInsightType: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#8b5cf6',
-    textTransform: 'capitalize',
-  },
-  mlInsightText: {
-    fontSize: 14,
-    color: '#ffffff',
-    lineHeight: 18,
-    marginBottom: 6,
-  },
-  mlInsightSavings: {
-    fontSize: 12,
-    color: '#10b981',
-    fontWeight: '600',
-  },
-  mlPredictionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(139, 92, 246, 0.2)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginTop: 4,
-  },
-  mlPredictionText: {
-    fontSize: 10,
-    color: '#8b5cf6',
-    fontWeight: '500',
-  },
-  mlPredictionChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    backgroundColor: 'rgba(139, 92, 246, 0.2)',
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    borderRadius: 4,
-    alignSelf: 'flex-start',
-    marginVertical: 4,
-  },
-  mlPredictionChipText: {
-    fontSize: 8,
-    color: '#8b5cf6',
-    fontWeight: '600',
-  },
-  smartAutomationCard: {
-    backgroundColor: 'rgba(139, 92, 246, 0.1)',
-    borderRadius: 6,
-    padding: 8,
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(139, 92, 246, 0.3)',
-  },
-  smartAutomationHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 4,
-  },
-  smartAutomationTitle: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#8b5cf6',
-  },
-  smartAutomationText: {
-    fontSize: 10,
-    color: '#d1d5db',
-  },
-  diagnosticsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-  },
-  deviceListDiagnostics: {
-    fontSize: 10,
-    color: '#6b7280',
-  },
-});

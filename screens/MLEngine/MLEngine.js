@@ -579,21 +579,36 @@ class MLEngine {
     }
   }
 
-  // Enhanced getPredictions using real simulation patterns
+  // Enhanced getPredictions using real simulation patterns (FIXED)
   getPredictions(appliances, horizon = 24) {
-    if (!this.initialized || !this.models.usagePatterns) {
-      return [];
+    // Normalize appliances to an array
+    const deviceList = Array.isArray(appliances) ? appliances : [];
+    
+    // If engine not ready or no usagePatterns yet, return empty predictions safely
+    if (!this.initialized || !this.models?.usagePatterns || !this.models.usagePatterns.devicePatterns) {
+      return deviceList.map(device => ({
+        deviceId: device.id,
+        deviceName: device.name,
+        prediction: {
+          willBeActive: false,
+          probability: 0.3,
+          expectedPower: 0,
+          confidence: 0.1,
+        },
+        timeHorizon: horizon,
+        timestamp: new Date().toISOString(),
+      }));
     }
 
+    const devicePatterns = this.models.usagePatterns.devicePatterns;
     const currentHour = new Date().getHours();
     const currentDay = new Date().getDay();
     const isWeekend = currentDay === 0 || currentDay === 6;
     
-    const predictions = appliances.map(device => {
-      const devicePattern = this.models.usagePatterns.devicePatterns[device.id];
+    const predictions = deviceList.map(device => {
+      const devicePattern = devicePatterns[device.id];
       
       if (!devicePattern) {
-        // No pattern data, use fallback
         return {
           deviceId: device.id,
           deviceName: device.name,
@@ -608,21 +623,24 @@ class MLEngine {
         };
       }
 
-      // Use actual pattern data for prediction
-      const baseProbability = isWeekend ? 
-        devicePattern.weekendProbabilities[currentHour] : 
-        devicePattern.weekdayProbabilities[currentHour];
-      
-      // Adjust probability based on recent trends and correlations
+      const weekday = Array.isArray(devicePattern.weekdayProbabilities) ? devicePattern.weekdayProbabilities : Array(24).fill(0);
+      const weekend = Array.isArray(devicePattern.weekendProbabilities) ? devicePattern.weekendProbabilities : Array(24).fill(0);
+      const hourly = Array.isArray(devicePattern.hourlyProbabilities) ? devicePattern.hourlyProbabilities : Array(24).fill(0);
+
+      const baseProbability = isWeekend ? (weekend[currentHour] ?? 0) : (weekday[currentHour] ?? 0);
       const adjustedProbability = this.adjustProbabilityWithContext(
         device.id, 
-        baseProbability, 
+        Number.isFinite(baseProbability) ? baseProbability : 0, 
         currentHour, 
         isWeekend
       );
       
       const willBeActive = adjustedProbability > 0.5;
-      const confidence = Math.min(0.95, this.calculatePredictionConfidence(devicePattern, currentHour));
+      const confidence = Math.min(0.95, this.calculatePredictionConfidence({
+        ...devicePattern,
+        hourlyActivity: Array.isArray(devicePattern.hourlyActivity) ? devicePattern.hourlyActivity : Array(24).fill({ samples: 0, active: 0 }),
+        hourlyProbabilities: hourly
+      }, currentHour));
 
       return {
         deviceId: device.id,
@@ -630,26 +648,27 @@ class MLEngine {
         prediction: {
           willBeActive,
           probability: adjustedProbability,
-          expectedPower: willBeActive ? (device.current_power || device.normal_usage) : 0,
+          expectedPower: willBeActive ? (device.current_power || device.normal_usage || 0) : 0,
           confidence: confidence,
-          basedOnSamples: devicePattern.totalSamples,
+          basedOnSamples: devicePattern.totalSamples || 0,
         },
         timeHorizon: horizon,
         timestamp: new Date().toISOString(),
         patternInfo: {
-          typicalHours: devicePattern.typicalUsageHours,
-          averagePower: devicePattern.averagePower,
+          typicalHours: Array.isArray(devicePattern.typicalUsageHours) ? devicePattern.typicalUsageHours : [],
+          averagePower: devicePattern.averagePower || 0,
         },
       };
     });
 
     this.metrics.predictionsMade += predictions.length;
-    
     return predictions;
   }
 
   // Enhanced getRecommendations using real simulation insights
   getRecommendations(appliances) {
+    const deviceList = Array.isArray(appliances) ? appliances : [];
+    
     if (!this.initialized) {
       return [];
     }
@@ -662,17 +681,18 @@ class MLEngine {
       const actualPeakHours = this.models.usagePatterns.peakHours;
       
       if (actualPeakHours.includes(currentHour)) {
-        const highUsageDevices = appliances.filter(device => {
-          const pattern = this.models.usagePatterns.devicePatterns[device.id];
+        const highUsageDevices = deviceList.filter(device => {
+          const pattern = this.models.usagePatterns.devicePatterns?.[device.id];
           return device.status === 'on' && 
                  pattern && 
-                 pattern.averagePower > 200 &&
+                 (pattern.averagePower || 0) > 200 &&
+                 Array.isArray(pattern.typicalUsageHours) &&
                  pattern.typicalUsageHours.includes(currentHour);
         });
 
         if (highUsageDevices.length > 0) {
           const totalPower = highUsageDevices.reduce((sum, device) => 
-            sum + (device.current_power || device.normal_usage), 0
+            sum + (device.current_power || device.normal_usage || 0), 0
           );
           const hourlyCost = (totalPower / 1000) * 2.50;
           const monthlySavings = hourlyCost * 30 * 0.2; // 20% savings estimate
@@ -695,21 +715,21 @@ class MLEngine {
 
     // 2. Always-on device optimization based on ACTUAL usage patterns
     if (this.models.usagePatterns) {
-      const alwaysOnDevices = Object.entries(this.models.usagePatterns.devicePatterns)
+      const alwaysOnDevices = Object.entries(this.models.usagePatterns.devicePatterns || {})
         .filter(([deviceId, pattern]) => 
-          pattern.alwaysOn && 
-          pattern.averagePower > 50 &&
-          appliances.some(d => d.id === deviceId && d.status === 'on')
+          pattern?.alwaysOn && 
+          (pattern.averagePower || 0) > 50 &&
+          deviceList.some(d => d.id === deviceId && d.status === 'on')
         )
         .map(([deviceId, pattern]) => ({
           deviceId,
           pattern,
-          device: appliances.find(d => d.id === deviceId),
+          device: deviceList.find(d => d.id === deviceId),
         }));
 
       if (alwaysOnDevices.length > 0) {
         const monthlySavings = alwaysOnDevices.reduce((sum, item) => {
-          const dailyCost = (item.pattern.averagePower / 1000) * 24 * 2.50;
+          const dailyCost = ((item.pattern.averagePower || 0) / 1000) * 24 * 2.50;
           return sum + (dailyCost * 30 * 0.3); // 30% potential savings
         }, 0);
 
@@ -732,14 +752,16 @@ class MLEngine {
 
     // 3. Device correlation recommendations
     if (this.models.usagePatterns && this.models.usagePatterns.deviceCorrelations) {
-      const highCorrelations = Object.values(this.models.usagePatterns.deviceCorrelations)
-        .filter(corr => corr.correlation > 0.7)
+      const highCorrelations = Object.values(this.models.usagePatterns.deviceCorrelations || {})
+        .filter(corr => (corr.correlation || 0) > 0.7)
         .slice(0, 3);
 
       highCorrelations.forEach(correlation => {
+        if (!correlation.devices || !Array.isArray(correlation.devices)) return;
+        
         const [device1, device2] = correlation.devices;
-        const device1Obj = appliances.find(d => d.id === device1);
-        const device2Obj = appliances.find(d => d.id === device2);
+        const device1Obj = deviceList.find(d => d.id === device1);
+        const device2Obj = deviceList.find(d => d.id === device2);
 
         if (device1Obj && device2Obj) {
           recommendations.push({
@@ -749,8 +771,8 @@ class MLEngine {
             devices: [device1, device2],
             potentialSavings: 15, // Rough estimate
             data: {
-              correlation: Math.round(correlation.correlation * 100),
-              togetherCount: correlation.togetherCount,
+              correlation: Math.round((correlation.correlation || 0) * 100),
+              togetherCount: correlation.togetherCount || 0,
             },
           });
         }
@@ -759,23 +781,23 @@ class MLEngine {
 
     // 4. Cost optimization from cost patterns
     if (this.models.costOptimization && this.models.costOptimization.savingsOpportunities) {
-      const topSavings = this.models.costOptimization.savingsOpportunities
-        .filter(opp => opp.monthlySavings > 10)
+      const topSavings = (this.models.costOptimization.savingsOpportunities || [])
+        .filter(opp => (opp.monthlySavings || 0) > 10)
         .slice(0, 2);
 
       topSavings.forEach(opportunity => {
-        const device = appliances.find(d => d.id === opportunity.deviceId);
+        const device = deviceList.find(d => d.id === opportunity.deviceId);
         if (device) {
           recommendations.push({
             type: 'cost_optimization',
             priority: 'high',
-            suggestion: opportunity.recommendation,
+            suggestion: opportunity.recommendation || 'Optimize usage timing',
             devices: [opportunity.deviceId],
-            potentialSavings: Math.round(opportunity.monthlySavings),
+            potentialSavings: Math.round(opportunity.monthlySavings || 0),
             data: {
-              currentCost: opportunity.currentCost,
-              potentialCost: opportunity.potentialCost,
-              peakHours: opportunity.peakHours,
+              currentCost: opportunity.currentCost || 0,
+              potentialCost: opportunity.potentialCost || 0,
+              peakHours: opportunity.peakHours || [],
             },
           });
         }
@@ -787,15 +809,17 @@ class MLEngine {
 
   // Detect anomalies in current appliance states
   detectAnomalies(appliances) {
+    const deviceList = Array.isArray(appliances) ? appliances : [];
+    
     if (!this.initialized || !this.models.anomalyDetection) {
       return { hasAnomaly: false, anomalies: [] };
     }
 
     const anomalies = [];
     const currentHour = new Date().getHours();
-    const totalPower = appliances
+    const totalPower = deviceList
       .filter(device => device.status === 'on')
-      .reduce((sum, device) => sum + (device.current_power || device.normal_usage), 0);
+      .reduce((sum, device) => sum + (device.current_power || device.normal_usage || 0), 0);
 
     // Check for unusual total power consumption
     const normalRange = this.models.anomalyDetection.normalRanges.power;
@@ -810,7 +834,7 @@ class MLEngine {
     }
 
     // Check hourly normal range
-    const hourlyRange = this.models.anomalyDetection.normalRanges.hourlyRanges[currentHour];
+    const hourlyRange = this.models.anomalyDetection.normalRanges.hourlyRanges?.[currentHour];
     if (hourlyRange && totalPower > hourlyRange.max) {
       anomalies.push({
         type: 'unusual_hourly_usage',
@@ -823,11 +847,11 @@ class MLEngine {
 
     // Check for devices that shouldn't be on at this time
     if (this.models.usagePatterns) {
-      appliances.forEach(device => {
+      deviceList.forEach(device => {
         if (device.status === 'on') {
-          const pattern = this.models.usagePatterns.devicePatterns[device.id];
-          if (pattern) {
-            const typicalUsage = pattern.hourlyProbabilities[currentHour];
+          const pattern = this.models.usagePatterns.devicePatterns?.[device.id];
+          if (pattern && Array.isArray(pattern.hourlyProbabilities)) {
+            const typicalUsage = pattern.hourlyProbabilities[currentHour] || 0;
             if (typicalUsage < 0.1) {
               anomalies.push({
                 type: 'unusual_operation',
@@ -852,6 +876,8 @@ class MLEngine {
 
   // Get energy forecast
   getEnergyForecast(appliances, hours = 12) {
+    const deviceList = Array.isArray(appliances) ? appliances : [];
+    
     if (!this.initialized) {
       return { 
         success: false, 
@@ -867,7 +893,7 @@ class MLEngine {
     
     for (let i = 0; i < hours; i++) {
       const hour = (currentHour + i) % 24;
-      const expectedPower = this.getExpectedPowerForHour(hour, appliances);
+      const expectedPower = this.getExpectedPowerForHour(hour, deviceList);
       const energyKwh = (expectedPower * 1) / 1000; // Energy for 1 hour in kWh
       const cost = energyKwh * 2.50; // Assuming R2.50 per kWh
       
@@ -1171,19 +1197,32 @@ class MLEngine {
     };
   }
 
-  // Analyze cost patterns and savings opportunities
+  // Analyze cost patterns and savings opportunities (FIXED)
   analyzeCostPatterns() {
     const hourlyCosts = Array(24).fill(0).map(() => ({ samples: 0, totalCost: 0 }));
     const savingsOpportunities = [];
     const optimalSchedules = {};
+
+    // Guard: ensure training data exists
+    if (!this.trainingData || !Array.isArray(this.trainingData.deviceUsage) || this.trainingData.deviceUsage.length === 0) {
+      console.warn('⚠️ No training data available for cost analysis');
+      return {
+        hourlyCosts: Array(24).fill(0).map((_, hour) => ({ hour, averageCost: 0, samples: 0 })),
+        peakCostHours: [17, 18, 19, 20],
+        savingsOpportunities: [],
+        optimalSchedules: {},
+      };
+    }
     
     // Calculate hourly costs (assuming R2.50 per kWh)
     this.trainingData.deviceUsage.forEach(entry => {
+      if (!entry || typeof entry.hour !== 'number' || typeof entry.totalPower !== 'number') return;
       const hour = entry.hour;
       const cost = (entry.totalPower / 1000) * 2.50; // Convert watts to kW, then to cost
-      
-      hourlyCosts[hour].samples++;
-      hourlyCosts[hour].totalCost += cost;
+      if (hour >= 0 && hour < 24) {
+        hourlyCosts[hour].samples++;
+        hourlyCosts[hour].totalCost += cost;
+      }
     });
     
     // Calculate average hourly costs
@@ -1194,43 +1233,55 @@ class MLEngine {
     }));
     
     // Identify peak cost hours
-    averageHourlyCosts.sort((a, b) => b.averageCost - a.averageCost);
-    const peakCostHours = averageHourlyCosts.slice(0, 4).map(h => h.hour);
+    const validCostHours = averageHourlyCosts.filter(h => h.averageCost > 0);
+    validCostHours.sort((a, b) => b.averageCost - a.averageCost);
+    const peakCostHours = validCostHours.length > 0 
+      ? validCostHours.slice(0, 4).map(h => h.hour)
+      : [17, 18, 19, 20];
     
     // Find savings opportunities
-    if (this.models.usagePatterns) {
-      Object.entries(this.models.usagePatterns.devicePatterns).forEach(([deviceId, pattern]) => {
-        const peakUsage = pattern.typicalUsageHours.filter(hour => 
-          peakCostHours.includes(hour)
-        );
-        
-        if (peakUsage.length > 0 && pattern.averagePower > 200) {
-          const potentialSavings = this.calculatePotentialSavings(deviceId, pattern, peakCostHours);
-          if (potentialSavings.monthlySavings > 5) { // Only suggest if savings > R5
-            savingsOpportunities.push({
-              deviceId,
-              deviceType: pattern.deviceType,
-              peakHours: peakUsage,
-              currentCost: potentialSavings.currentCost,
-              potentialCost: potentialSavings.potentialCost,
-              monthlySavings: potentialSavings.monthlySavings,
-              recommendation: `Shift ${pattern.deviceType} usage away from peak hours (${peakUsage.join(', ')})`
-            });
+    const devicePatterns = this.models?.usagePatterns?.devicePatterns || null;
+    if (devicePatterns && typeof devicePatterns === 'object') {
+      try {
+        Object.entries(devicePatterns).forEach(([deviceId, pattern]) => {
+          if (!pattern || !Array.isArray(pattern.typicalUsageHours)) return;
+          const peakUsage = pattern.typicalUsageHours.filter(hour => peakCostHours.includes(hour));
+          const devicePower = pattern.averagePower || 0;
+          if (peakUsage.length > 0 && devicePower > 200) {
+            const potentialSavings = this.calculatePotentialSavings(deviceId, pattern, peakCostHours);
+            if (potentialSavings && potentialSavings.monthlySavings > 5) {
+              savingsOpportunities.push({
+                deviceId,
+                deviceType: pattern.deviceType || 'Unknown',
+                peakHours: peakUsage,
+                currentCost: potentialSavings.currentCost || 0,
+                potentialCost: potentialSavings.potentialCost || 0,
+                monthlySavings: potentialSavings.monthlySavings || 0,
+                recommendation: `Shift ${pattern.deviceType || 'device'} usage away from peak hours (${peakUsage.join(', ')})`
+              });
+            }
           }
-        }
-      });
+        });
+      } catch (err) {
+        console.error('Error processing device patterns for cost analysis:', err);
+      }
     }
     
     // Calculate optimal schedules for each device
-    if (this.models.usagePatterns) {
-      Object.entries(this.models.usagePatterns.devicePatterns).forEach(([deviceId, pattern]) => {
-        const optimalHours = this.findOptimalUsageHours(pattern, averageHourlyCosts);
-        optimalSchedules[deviceId] = {
-          deviceId,
-          optimalHours,
-          costReduction: this.calculateCostReduction(pattern, optimalHours, averageHourlyCosts),
-        };
-      });
+    if (devicePatterns && typeof devicePatterns === 'object') {
+      try {
+        Object.entries(devicePatterns).forEach(([deviceId, pattern]) => {
+          if (!pattern) return;
+          const optimalHours = this.findOptimalUsageHours(pattern, averageHourlyCosts);
+          optimalSchedules[deviceId] = {
+            deviceId,
+            optimalHours: optimalHours || [],
+            costReduction: this.calculateCostReduction(pattern, optimalHours || [], averageHourlyCosts),
+          };
+        });
+      } catch (err) {
+        console.error('Error calculating optimal schedules:', err);
+      }
     }
     
     return {
@@ -1272,18 +1323,15 @@ class MLEngine {
   }
 
   calculatePotentialSavings(deviceId, pattern, peakCostHours) {
+    if (!pattern || !Array.isArray(pattern.typicalUsageHours) || !Array.isArray(peakCostHours)) {
+      return { currentCost: 0, potentialCost: 0, monthlySavings: 0 };
+    }
     const peakUsageHours = pattern.typicalUsageHours.filter(hour => peakCostHours.includes(hour));
-    const offPeakUsageHours = pattern.typicalUsageHours.filter(hour => !peakCostHours.includes(hour));
-    
     if (peakUsageHours.length === 0) return { currentCost: 0, potentialCost: 0, monthlySavings: 0 };
-    
-    // Calculate current cost (using peak rates)
-    const peakUsage = peakUsageHours.length * pattern.averagePower;
-    const currentDailyCost = (peakUsage / 1000) * 2.50; // Peak rate
-    
-    // Calculate potential cost (using off-peak rates)
-    const potentialDailyCost = (peakUsage / 1000) * 2.00; // Off-peak rate assumption
-    
+    const devicePower = pattern.averagePower || 0;
+    const peakUsage = peakUsageHours.length * devicePower;
+    const currentDailyCost = (peakUsage / 1000) * 2.50;
+    const potentialDailyCost = (peakUsage / 1000) * 2.00;
     return {
       currentCost: Math.round(currentDailyCost * 30),
       potentialCost: Math.round(potentialDailyCost * 30),
@@ -1292,60 +1340,82 @@ class MLEngine {
   }
 
   findOptimalUsageHours(pattern, hourlyCosts) {
-    // Find hours with high usage probability but low cost
-    const scores = hourlyCosts.map((costData, hour) => ({
-      hour,
-      score: pattern.hourlyProbabilities[hour] * (1 - (costData.averageCost / Math.max(0.1, Math.max(...hourlyCosts.map(c => c.averageCost))))),
-      probability: pattern.hourlyProbabilities[hour],
-      cost: costData.averageCost,
-    }));
-    
+    if (!pattern || !Array.isArray(pattern.hourlyProbabilities) || !Array.isArray(hourlyCosts) || hourlyCosts.length !== 24) {
+      console.warn('⚠️ Invalid data for optimal hours calculation');
+      return [6, 10, 14, 22];
+    }
+    const maxCost = Math.max(...hourlyCosts.map(c => c.averageCost || 0));
+    const scores = hourlyCosts.map((costData, hour) => {
+      const probability = pattern.hourlyProbabilities[hour] || 0;
+      const cost = costData.averageCost || 0;
+      const normalizedCost = maxCost > 0 ? cost / maxCost : 0;
+      return {
+        hour,
+        score: probability * (1 - normalizedCost),
+        probability,
+        cost,
+      };
+    });
     scores.sort((a, b) => b.score - a.score);
     return scores.slice(0, 4).map(s => s.hour).sort((a, b) => a - b);
   }
 
   calculateCostReduction(pattern, optimalHours, hourlyCosts) {
-    const currentCost = pattern.typicalUsageHours.reduce((sum, hour) => 
-      sum + (pattern.averagePower / 1000) * hourlyCosts[hour].averageCost, 0
-    );
-    
-    const optimalCost = optimalHours.reduce((sum, hour) => 
-      sum + (pattern.averagePower / 1000) * hourlyCosts[hour].averageCost, 0
-    );
-    
-    return currentCost - optimalCost;
+    if (!pattern || !Array.isArray(pattern.typicalUsageHours) || !Array.isArray(optimalHours) || !Array.isArray(hourlyCosts)) {
+      return 0;
+    }
+    const devicePower = pattern.averagePower || 0;
+    try {
+      const currentCost = pattern.typicalUsageHours.reduce((sum, hour) => {
+        const hourData = hourlyCosts[hour];
+        const cost = hourData ? hourData.averageCost || 0 : 0;
+        return sum + (devicePower / 1000) * cost;
+      }, 0);
+      const optimalCost = optimalHours.reduce((sum, hour) => {
+        const hourData = hourlyCosts[hour];
+        const cost = hourData ? hourData.averageCost || 0 : 0;
+        return sum + (devicePower / 1000) * cost;
+      }, 0);
+      return Math.max(0, currentCost - optimalCost);
+    } catch (error) {
+      console.error('Error calculating cost reduction:', error);
+      return 0;
+    }
   }
 
   adjustProbabilityWithContext(deviceId, baseProbability, hour, isWeekend) {
-    // Consider device correlations
     let adjustment = 0;
-    
-    if (this.models.usagePatterns && this.models.usagePatterns.deviceCorrelations) {
-      Object.values(this.models.usagePatterns.deviceCorrelations).forEach(correlation => {
-        if (correlation.devices.includes(deviceId)) {
-          const otherDeviceId = correlation.devices.find(id => id !== deviceId);
-          // If correlated device is typically active at this hour, increase probability
-          const otherPattern = this.models.usagePatterns.devicePatterns[otherDeviceId];
-          if (otherPattern) {
-            const otherProb = isWeekend ? 
-              otherPattern.weekendProbabilities[hour] : 
-              otherPattern.weekdayProbabilities[hour];
-            adjustment += correlation.correlation * otherProb * 0.1;
-          }
+    const usage = this.models?.usagePatterns;
+    const correlations = usage?.deviceCorrelations ? Object.values(usage.deviceCorrelations) : [];
+    const patterns = usage?.devicePatterns || {};
+
+    correlations.forEach(correlation => {
+      if (!correlation?.devices || !Array.isArray(correlation.devices)) return;
+      if (correlation.devices.includes(deviceId)) {
+        const otherDeviceId = correlation.devices.find(id => id !== deviceId);
+        const otherPattern = patterns[otherDeviceId];
+        if (otherPattern) {
+          const otherWeekday = Array.isArray(otherPattern.weekdayProbabilities) ? otherPattern.weekdayProbabilities : Array(24).fill(0);
+          const otherWeekend = Array.isArray(otherPattern.weekendProbabilities) ? otherPattern.weekendProbabilities : Array(24).fill(0);
+          const otherProb = isWeekend ? (otherWeekend[hour] ?? 0) : (otherWeekday[hour] ?? 0);
+          adjustment += (correlation.correlation || 0) * (otherProb || 0) * 0.1;
         }
-      });
-    }
+      }
+    });
     
-    return Math.max(0, Math.min(1, baseProbability + adjustment));
+    return Math.max(0, Math.min(1, (Number.isFinite(baseProbability) ? baseProbability : 0) + adjustment));
   }
 
   calculatePredictionConfidence(pattern, hour) {
-    const samplesAtHour = pattern.hourlyActivity[hour].samples;
-    const totalSamples = pattern.totalSamples;
+    const hourActivity = Array.isArray(pattern.hourlyActivity) && pattern.hourlyActivity[hour] ? pattern.hourlyActivity[hour] : { samples: 0, active: 0 };
+    const samplesAtHour = hourActivity.samples || 0;
+    const totalSamples = pattern.totalSamples || 1;
     
     // Confidence based on data quantity and pattern consistency
     const dataConfidence = Math.min(1, samplesAtHour / 10);
-    const patternStrength = Math.abs(pattern.hourlyProbabilities[hour] - 0.5) * 2; // How far from 50/50
+    const hourlyProbs = Array.isArray(pattern.hourlyProbabilities) ? pattern.hourlyProbabilities : Array(24).fill(0);
+    const currentHourProb = hourlyProbs[hour] || 0;
+    const patternStrength = Math.abs(currentHourProb - 0.5) * 2; // How far from 50/50
     
     return (dataConfidence * 0.7) + (patternStrength * 0.3);
   }
@@ -1408,13 +1478,16 @@ class MLEngine {
   }
 
   getExpectedPowerForHour(hour, appliances) {
+    const deviceList = Array.isArray(appliances) ? appliances : [];
     const hourData = this.trainingData.deviceUsage.filter(entry => entry.hour === hour);
+    
     if (hourData.length === 0) {
       // Fallback: estimate based on device types and typical usage
-      return appliances.reduce((sum, device) => {
-        const pattern = this.models.usagePatterns?.devicePatterns[device.id];
-        const typicalUsage = pattern ? pattern.hourlyProbabilities[hour] : 0.3;
-        return sum + (device.normal_usage * typicalUsage);
+      return deviceList.reduce((sum, device) => {
+        const pattern = this.models.usagePatterns?.devicePatterns?.[device.id];
+        const hourlyProbs = Array.isArray(pattern?.hourlyProbabilities) ? pattern.hourlyProbabilities : Array(24).fill(0.3);
+        const typicalUsage = hourlyProbs[hour] ?? 0.3;
+        return sum + ((device.normal_usage || 0) * typicalUsage);
       }, 0);
     }
     
@@ -1433,11 +1506,14 @@ class MLEngine {
   }
 
   getMaxConcurrentDevices() {
+    if (this.trainingData.deviceUsage.length === 0) return 5;
     return Math.max(...this.trainingData.deviceUsage.map(entry => entry.activeDeviceCount));
   }
 
-  // Update the getMLInsights to include user info
+  // Update the getMLInsights to include user info (FIXED)
   getMLInsights(appliances) {
+    const deviceList = Array.isArray(appliances) ? appliances : [];
+    
     if (!this.initialized) {
       return {
         ready: false,
@@ -1445,6 +1521,9 @@ class MLEngine {
         dataProgress: Math.min(100, (this.trainingData.deviceUsage.length / this.config.minDataPoints) * 100),
         userId: this.userId,
         userSpecific: true,
+        predictions: [],
+        recommendations: [],
+        anomalies: { hasAnomaly: false, anomalies: [] },
       };
     }
     
@@ -1453,9 +1532,9 @@ class MLEngine {
       accuracy: this.metrics.accuracy,
       lastTrained: this.metrics.lastTrainedAt,
       dataSamples: this.trainingData.deviceUsage.length,
-      predictions: this.getPredictions(appliances),
-      recommendations: this.getRecommendations(appliances),
-      anomalies: this.detectAnomalies(appliances),
+      predictions: this.getPredictions(deviceList),
+      recommendations: this.getRecommendations(deviceList),
+      anomalies: this.detectAnomalies(deviceList),
       userId: this.userId,
       userSpecific: true,
     };
