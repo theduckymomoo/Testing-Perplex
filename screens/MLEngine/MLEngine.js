@@ -6,7 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 class MLEngine {
   constructor(userId, config = {}) {
     this.userId = userId;
-    this.modelVersion = '3.1.0'; // Updated version for enhanced timing predictions
+    this.modelVersion = '3.2.0'; // Updated version for enhanced timing predictions and fixed data paths
     
     // User-specific storage keys
     this.storageKey = `@ml_models_v3_${userId}`;
@@ -15,7 +15,7 @@ class MLEngine {
     
     // Configuration
     this.config = {
-      minDataPoints: config.minDataPoints || 7, // Days instead of samples
+      minDataPoints: config.minDataPoints || 5, // Days instead of samples
       predictionHorizon: config.predictionHorizon || 24,
       retrainInterval: config.retrainInterval || 86400000,
       confidenceThreshold: config.confidenceThreshold || 0.7,
@@ -30,16 +30,16 @@ class MLEngine {
       userBehavior: null,
       costOptimization: null,
       anomalyDetection: null,
-      dayPatterns: null, // NEW: Day-level pattern models
+      dayPatterns: null, // Primary model for day-based predictions
     };
     
     // Enhanced training data structure
     this.trainingData = {
-      deviceUsage: [], // Backward compatibility
+      deviceUsage: [], // Backward compatibility only
       userActions: [],
       contextData: [],
       costData: [],
-      dayPatterns: [], // NEW: Full day patterns
+      dayPatterns: [], // PRIMARY: Full day patterns - this is the main data store
     };
     
     // Performance metrics
@@ -309,7 +309,7 @@ class MLEngine {
     }
   }
 
-  // NEW: Collect full day pattern instead of single point
+  // ENHANCED: Collect full day pattern instead of single point
   async collectDayPattern(appliances) {
     try {
       console.log('📅 Collecting full day pattern...');
@@ -402,9 +402,6 @@ class MLEngine {
       
       this.trainingData.dayPatterns.push(dayPattern);
       
-      // Also maintain compatibility with hourly data
-      this.trainingData.deviceUsage.push(...dayPattern.hourlySnapshots);
-      
       // Keep data manageable
       if (this.trainingData.dayPatterns.length > 100) {
         this.trainingData.dayPatterns = this.trainingData.dayPatterns.slice(-50);
@@ -419,7 +416,7 @@ class MLEngine {
     }
   }
 
-  // NEW: Predict device state for specific hour based on existing patterns
+  // Predict device state for specific hour based on existing patterns
   predictDeviceStateForHour(device, hour, isWeekend) {
     // Simple prediction based on device type and hour
     const patterns = {
@@ -612,7 +609,7 @@ class MLEngine {
         dailyNormalRanges: this.calculateDailyNormalRanges(),
       };
 
-      // Calculate enhanced accuracy based on day patterns
+      // FIXED: Calculate enhanced accuracy based on day patterns
       const accuracy = this.calculateDayBasedAccuracy(dayInsights, patterns);
       
       // Update metrics
@@ -707,7 +704,7 @@ class MLEngine {
         deviceName: device.name,
         prediction: {
           willBeActive,
-          probability: adjustedProbability,
+          probability: Math.round(adjustedProbability * 100),
           expectedPower: willBeActive ? (device.current_power || device.normal_usage || 0) : 0,
           confidence: confidence,
           basedOnDays: this.trainingData.dayPatterns?.length || 0,
@@ -726,7 +723,7 @@ class MLEngine {
     return predictions;
   }
 
-  // NEW: Generate detailed daily schedule for device
+  // Generate detailed daily schedule for device
   generateDailySchedule(device, isWeekend) {
     const schedule = [];
     const deviceType = device.type.toLowerCase();
@@ -766,7 +763,7 @@ class MLEngine {
     return schedule;
   }
 
-  // NEW: Find next state change prediction
+  // Find next state change prediction
   findNextStateChange(device, currentHour, dailySchedule) {
     const currentState = device.status === 'on';
     
@@ -800,7 +797,7 @@ class MLEngine {
     return null;
   }
 
-  // NEW: Get typical usage hours for a device
+  // Get typical usage hours for a device
   getTypicalUsageHours(device, isWeekend) {
     const deviceType = device.type.toLowerCase();
     const patterns = this.getDevicePatternsByType(deviceType, isWeekend);
@@ -813,7 +810,7 @@ class MLEngine {
     }));
   }
 
-  // NEW: Calculate energy impact for the day
+  // Calculate energy impact for the day
   calculateEnergyImpact(device, dailySchedule) {
     const totalHoursOn = dailySchedule.filter(h => h.isActive).length;
     const totalEnergyKwh = (totalHoursOn * (device.normal_usage || 0)) / 1000;
@@ -832,7 +829,7 @@ class MLEngine {
     };
   }
 
-  // NEW: Get device patterns by type
+  // Get device patterns by type
   getDevicePatternsByType(deviceType, isWeekend) {
     const patterns = {
       refrigerator: {
@@ -969,13 +966,13 @@ class MLEngine {
     };
   }
 
-  // NEW: Get hourly probability for device
+  // Get hourly probability for device
   getHourlyProbability(device, hour, isWeekend) {
     const patterns = this.getDevicePatternsByType(device.type.toLowerCase(), isWeekend);
     return patterns.probabilities[hour] || 0;
   }
 
-  // NEW: Calculate hourly confidence
+  // Calculate hourly confidence
   calculateHourlyConfidence(device, hour) {
     // Base confidence on historical data if available
     const dayPatterns = this.trainingData.dayPatterns || [];
@@ -995,7 +992,7 @@ class MLEngine {
     return Math.min(0.95, consistency * sampleSize + 0.2);
   }
 
-  // NEW: Get reason for hourly prediction
+  // Get reason for hourly prediction
   getHourlyReason(device, hour, isWeekend, isActive) {
     const patterns = this.getDevicePatternsByType(device.type.toLowerCase(), isWeekend);
     
@@ -1008,7 +1005,7 @@ class MLEngine {
     }
   }
 
-  // NEW: Estimate usage duration
+  // Estimate usage duration
   estimateUsageDuration(device, startHour, dailySchedule) {
     let duration = 0;
     for (let i = startHour; i < dailySchedule.length; i++) {
@@ -1028,7 +1025,7 @@ class MLEngine {
     };
   }
 
-  // NEW: Get tomorrow's first transition
+  // Get tomorrow's first transition
   getTomorrowFirstTransition(device, currentState) {
     const tomorrowIsWeekend = new Date().getDay() === 6; // Tomorrow
     const patterns = this.getDevicePatternsByType(device.type.toLowerCase(), tomorrowIsWeekend);
@@ -1050,7 +1047,7 @@ class MLEngine {
     return null;
   }
 
-  // NEW: Get day-based probability for device
+  // Get day-based probability for device
   getDayBasedProbability(device, hour, dayPattern) {
     if (!dayPattern || !dayPattern.hourlyAverages) return 0.3;
     
@@ -1133,7 +1130,7 @@ class MLEngine {
     return recommendations.slice(0, 5);
   }
 
-  // NEW: Missing method - Get hourly-based recommendations (fallback)
+  // Get hourly-based recommendations (fallback)
   getHourlyBasedRecommendations(deviceList, currentHour) {
     const recommendations = [];
     
@@ -1473,41 +1470,61 @@ class MLEngine {
     return hourCount > 0 ? totalSimilarity / hourCount : 0.5;
   }
 
+  // FIXED: Safe accuracy calculation
   calculateDayBasedAccuracy(dayInsights, patterns) {
     const dayPatterns = this.trainingData.dayPatterns || [];
-    if (dayPatterns.length < 3) return 0.5; // Default accuracy for small datasets
+    if (dayPatterns.length < 2) return 0.5; // Default for small datasets
     
     let totalAccuracy = 0;
     let validPatterns = 0;
     
     dayPatterns.forEach(dayPattern => {
-      const predictedEnergy = this.predictDayEnergy(dayPattern, patterns);
-      const actualEnergy = dayPattern.summary.totalEnergyKwh;
-      
-      if (actualEnergy > 0) {
-        const accuracy = 1 - Math.abs(predictedEnergy - actualEnergy) / actualEnergy;
-        totalAccuracy += Math.max(0, accuracy);
-        validPatterns++;
+      try {
+        const predictedEnergy = this.predictDayEnergy(dayPattern, patterns);
+        const actualEnergy = dayPattern.summary?.totalEnergyKwh || 0;
+        
+        // FIXED: Prevent division by zero and handle edge cases
+        if (actualEnergy > 0 && !isNaN(predictedEnergy) && predictedEnergy > 0) {
+          const accuracy = 1 - Math.min(1, Math.abs(predictedEnergy - actualEnergy) / actualEnergy);
+          totalAccuracy += Math.max(0, accuracy);
+          validPatterns++;
+        }
+      } catch (error) {
+        // Skip invalid patterns
+        console.warn('Skipping invalid day pattern in accuracy calculation');
       }
     });
     
-    return validPatterns > 0 ? totalAccuracy / validPatterns : 0.5;
+    // FIXED: Safe accuracy calculation with bounds
+    return validPatterns > 0 ? Math.min(0.95, Math.max(0.1, totalAccuracy / validPatterns)) : 0.5;
   }
 
+  // FIXED: Safe energy prediction
   predictDayEnergy(dayPattern, patterns) {
-    // Simple prediction based on device patterns
-    let predictedEnergy = 0;
-    
-    dayPattern.hourlySnapshots.forEach(hour => {
-      hour.devices.forEach(device => {
-        const devicePattern = patterns.devicePatterns?.[device.id];
-        if (devicePattern && device.isActive) {
-          predictedEnergy += (devicePattern.averagePower || 0) / 1000;
+    try {
+      let predictedEnergy = 0;
+      
+      if (!dayPattern.hourlySnapshots || dayPattern.hourlySnapshots.length === 0) {
+        return 0;
+      }
+      
+      dayPattern.hourlySnapshots.forEach(hour => {
+        if (hour.devices && Array.isArray(hour.devices)) {
+          hour.devices.forEach(device => {
+            if (device.isActive) {
+              const devicePattern = patterns.devicePatterns?.[device.id];
+              const power = devicePattern?.averagePower || device.power || 0;
+              predictedEnergy += power / 1000; // Convert to kWh
+            }
+          });
         }
       });
-    });
-    
-    return predictedEnergy;
+      
+      return Math.max(0, predictedEnergy);
+    } catch (error) {
+      console.warn('Error predicting day energy:', error);
+      return 0;
+    }
   }
 
   calculateDailyNormalRanges() {

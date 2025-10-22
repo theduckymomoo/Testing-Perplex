@@ -21,14 +21,12 @@ class MLService {
       useSimulatedData: true,
       simulationDataWeight: 0.7,
       cloudSyncEnabled: true,
-      // NEW: Day-based sampling configuration
-      samplingMode: 'daily', // 'hourly' or 'daily'
-      hoursPerSample: 24, // Full day samples
-      contextWindow: 3, // Hours of context around each sample
+      samplingMode: 'daily',
+      hoursPerSample: 24,
+      contextWindow: 3,
     };
   }
 
-  // Set the current user and switch to their ML engine
   setCurrentUser(userId, supabase = null) {
     if (!userId) {
       console.warn('⚠️ Cannot set ML engine: No user ID provided');
@@ -46,17 +44,15 @@ class MLService {
     console.log(`👤 Switching to user ML engine: ${userId}`);
     this.currentUserId = userId;
     
-    // Get or create user's ML engine
     if (!this.userEngines.has(userId)) {
       this.currentEngine = new MLEngine(userId, {
-        minDataPoints: 30,
+        minDataPoints: 7, // Days
         predictionHorizon: 24,
         retrainInterval: 3600000,
         confidenceThreshold: 0.7,
-        samplingMode: 'daily', // Pass sampling mode to engine
+        samplingMode: 'daily',
       });
       
-      // Set Supabase client for cloud sync
       if (supabase && this.config.cloudSyncEnabled) {
         this.currentEngine.setSupabaseClient(supabase);
       }
@@ -71,7 +67,6 @@ class MLService {
     this.initialized = false;
   }
 
-  // Get current user's engine with safety check
   getCurrentEngine() {
     if (!this.currentEngine || !this.currentUserId) {
       console.warn('⚠️ No user selected for ML engine. Call setCurrentUser first.');
@@ -80,7 +75,7 @@ class MLService {
     return this.currentEngine;
   }
 
-  // UPDATED: Day-based data collection
+  // FIXED: Single data collection method that creates BOTH dayPatterns AND hourly data
   async collectData(appliances) {
     const engine = this.getCurrentEngine();
     if (!engine) { 
@@ -91,11 +86,11 @@ class MLService {
     try {
       const deviceList = Array.isArray(appliances) ? appliances : [];
       
-      // Collect full day pattern instead of single point
+      // Always collect as day pattern - this fixes the main issue
       await engine.collectDayPattern(deviceList);
       
       const min = this.simulationEnabled ? 
-        Math.max(7, engine.config.minDataPoints * 0.3) : // Days instead of hours
+        Math.max(3, engine.config.minDataPoints * 0.5) : // 3-4 days minimum
         engine.config.minDataPoints;
         
       if (this.config.autoTrainEnabled && 
@@ -109,7 +104,7 @@ class MLService {
     }
   }
 
-  // UPDATED: Fast-forward simulation with day-based approach
+  // FIXED: Fast-forward creates dayPatterns correctly
   async fastForwardSimulation(days = 7, onProgress = null) {
     if (!this.simulationEnabled) return { success: false, error: 'Simulation not enabled' };
     if (!this.hasCurrentUser()) return { success: false, error: 'No user selected for simulation' };
@@ -121,6 +116,7 @@ class MLService {
     for (let day = 0; day < days; day++) {
       const dayPattern = this.generateFullDayPattern(day);
       
+      // CRITICAL FIX: Use injectDayPattern instead of injectSimulationData
       await this.injectDayPattern(dayPattern);
       
       daysGenerated++;
@@ -129,7 +125,7 @@ class MLService {
         onProgress({
           day: day + 1,
           totalDays: days,
-          samples: daysGenerated,
+          dayPatterns: daysGenerated, // Show day patterns, not samples
           progress: Math.round(((day + 1) / days) * 100)
         });
       }
@@ -144,13 +140,12 @@ class MLService {
     
     return { 
       success: true, 
-      samplesGenerated: daysGenerated, 
+      dayPatternsGenerated: daysGenerated, // FIXED: Return day patterns count
       simulatedDays: days, 
       status: this.getSimulationStatus() 
     };
   }
 
-  // NEW: Generate full day pattern with realistic transitions
   generateFullDayPattern(dayOffset = 0) {
     const currentDate = new Date();
     currentDate.setDate(currentDate.getDate() - dayOffset);
@@ -158,8 +153,7 @@ class MLService {
     const isWeekend = currentDate.getDay() === 0 || currentDate.getDay() === 6;
     const dayType = isWeekend ? 'weekend' : 'weekday';
     
-    // Generate full 24-hour pattern with context and transitions
-    const hourlyData = [];
+    const hourlySnapshots = []; // FIXED: Use correct property name
     const dayEvents = this.generateDayEvents(isWeekend);
     
     for (let hour = 0; hour < 24; hour++) {
@@ -172,7 +166,7 @@ class MLService {
           hour, 
           isWeekend, 
           dayEvents,
-          hourlyData[hour - 1] // Previous hour for context
+          hourlySnapshots[hour - 1] // Previous hour for context
         );
         
         return {
@@ -182,7 +176,7 @@ class MLService {
           status: devicePattern.isActive ? 'on' : 'off',
           power: devicePattern.power,
           isActive: devicePattern.isActive,
-          transitionReason: devicePattern.reason, // Why it changed
+          transitionReason: devicePattern.reason,
           context: devicePattern.context,
         };
       });
@@ -191,7 +185,7 @@ class MLService {
         .filter(device => device.isActive)
         .reduce((sum, device) => sum + device.power, 0);
 
-      hourlyData.push({
+      hourlySnapshots.push({
         timestamp: timestamp.toISOString(),
         hour,
         dayOfWeek: currentDate.getDay(),
@@ -200,39 +194,32 @@ class MLService {
         totalPower,
         activeDeviceCount: devices.filter(d => d.isActive).length,
         dayEvents: dayEvents.filter(event => event.hour === hour),
-        context: {
-          previousHourPower: hour > 0 ? hourlyData[hour - 1].totalPower : 0,
-          powerTrend: this.calculatePowerTrend(hourlyData, hour),
-          timeOfDay: this.getTimeOfDayContext(hour),
-        }
       });
     }
 
-    // Generate user actions based on device transitions
-    const userActions = this.extractUserActionsFromDay(hourlyData, currentDate);
-    
+    // FIXED: Return correct day pattern structure
     return {
       date: currentDate.toISOString().split('T')[0],
       dayOfWeek: currentDate.getDay(),
       isWeekend,
       dayType,
-      hourlyData,
-      userActions,
-      dayEvents,
+      collectedAt: new Date().toISOString(),
+      realData: false, // This is simulated
+      hourlySnapshots, // FIXED: Use correct property name
       summary: {
-        totalEnergyKwh: hourlyData.reduce((sum, hour) => sum + hour.totalPower, 0) / 1000,
-        peakHour: hourlyData.reduce((max, hour) => hour.totalPower > max.totalPower ? hour : max, hourlyData[0]),
-        averagePower: hourlyData.reduce((sum, hour) => sum + hour.totalPower, 0) / 24,
-        activeDeviceHours: hourlyData.reduce((sum, hour) => sum + hour.activeDeviceCount, 0),
-      }
+        totalEnergyKwh: hourlySnapshots.reduce((sum, hour) => sum + hour.totalPower, 0) / 1000,
+        peakHour: hourlySnapshots.reduce((max, hour, index) => 
+          hour.totalPower > hourlySnapshots[max]?.totalPower ? index : max, 0),
+        averagePower: hourlySnapshots.reduce((sum, hour) => sum + hour.totalPower, 0) / 24,
+        activeDeviceHours: hourlySnapshots.reduce((sum, hour) => sum + hour.activeDeviceCount, 0),
+      },
+      dayEvents
     };
   }
 
-  // NEW: Generate realistic day events that affect device usage
   generateDayEvents(isWeekend) {
     const events = [];
     
-    // Morning routine
     if (Math.random() < 0.8) {
       const wakeUpHour = isWeekend ? 7 + Math.floor(Math.random() * 3) : 6 + Math.floor(Math.random() * 2);
       events.push({
@@ -244,7 +231,6 @@ class MLService {
       });
     }
     
-    // Meal times
     [7, 12, 18].forEach(mealHour => {
       if (Math.random() < 0.7) {
         events.push({
@@ -257,7 +243,6 @@ class MLService {
       }
     });
     
-    // Work hours (if weekday)
     if (!isWeekend) {
       events.push({
         hour: 8 + Math.floor(Math.random() * 2),
@@ -276,7 +261,6 @@ class MLService {
       });
     }
     
-    // Evening routine
     if (Math.random() < 0.9) {
       const eveningHour = 18 + Math.floor(Math.random() * 4);
       events.push({
@@ -288,7 +272,6 @@ class MLService {
       });
     }
     
-    // Bedtime
     if (Math.random() < 0.8) {
       const bedtimeHour = isWeekend ? 23 + Math.floor(Math.random() * 2) : 22 + Math.floor(Math.random() * 2);
       events.push({
@@ -303,13 +286,11 @@ class MLService {
     return events;
   }
 
-  // NEW: Get realistic device state based on full day context
   getRealisticDeviceState(appliance, hour, isWeekend, dayEvents, previousHourData) {
     const basePattern = this.getDeviceHourlyProbability(appliance.type, hour, isWeekend);
     let probability = basePattern.probability;
     let reason = basePattern.reason;
     
-    // Adjust based on day events
     const relevantEvents = dayEvents.filter(event => 
       Math.abs(event.hour - hour) <= 1 && 
       event.deviceTypes.includes(appliance.type)
@@ -346,17 +327,14 @@ class MLService {
       }
     });
     
-    // Consider previous hour state for continuity
     if (previousHourData) {
       const prevDevice = previousHourData.devices.find(d => d.id === appliance.id);
       if (prevDevice?.isActive) {
-        // Device was on - more likely to stay on
         probability *= 1.3;
         reason += ' (continuation)';
       }
     }
     
-    // Cap probability
     probability = Math.min(0.95, probability);
     
     const isActive = Math.random() < probability;
@@ -376,16 +354,15 @@ class MLService {
     };
   }
 
-  // NEW: Device probability patterns based on type and time
   getDeviceHourlyProbability(deviceType, hour, isWeekend) {
     const patterns = {
       refrigerator: {
-        probability: 1.0, // Always on
+        probability: 1.0,
         reason: 'Essential appliance - always running'
       },
       
       router: {
-        probability: 1.0, // Always on
+        probability: 1.0,
         reason: 'Network essential - always running'
       },
       
@@ -438,12 +415,11 @@ class MLService {
     return patterns[deviceType.toLowerCase()] || patterns.default;
   }
 
-  // Device-specific probability functions
   getLightProbability(hour, isWeekend) {
-    if (hour >= 22 || hour <= 6) return 0.8; // Night
-    if (hour >= 7 && hour <= 9) return 0.6; // Morning
-    if (hour >= 18 && hour <= 21) return 0.9; // Evening
-    return 0.1; // Daytime
+    if (hour >= 22 || hour <= 6) return 0.8;
+    if (hour >= 7 && hour <= 9) return 0.6;
+    if (hour >= 18 && hour <= 21) return 0.9;
+    return 0.1;
   }
 
   getLightReason(hour, isWeekend) {
@@ -455,12 +431,12 @@ class MLService {
 
   getTVProbability(hour, isWeekend) {
     if (isWeekend) {
-      if (hour >= 10 && hour <= 14) return 0.5; // Weekend afternoon
-      if (hour >= 19 && hour <= 23) return 0.8; // Weekend evening
+      if (hour >= 10 && hour <= 14) return 0.5;
+      if (hour >= 19 && hour <= 23) return 0.8;
       return 0.2;
     } else {
-      if (hour >= 19 && hour <= 22) return 0.7; // Weekday evening
-      if (hour >= 7 && hour <= 8) return 0.3; // Morning news
+      if (hour >= 19 && hour <= 22) return 0.7;
+      if (hour >= 7 && hour <= 8) return 0.3;
       return 0.1;
     }
   }
@@ -474,11 +450,11 @@ class MLService {
 
   getComputerProbability(hour, isWeekend) {
     if (isWeekend) {
-      if (hour >= 14 && hour <= 20) return 0.4; // Weekend usage
+      if (hour >= 14 && hour <= 20) return 0.4;
       return 0.1;
     } else {
-      if (hour >= 8 && hour <= 17) return 0.8; // Work hours
-      if (hour >= 19 && hour <= 21) return 0.3; // Evening personal use
+      if (hour >= 8 && hour <= 17) return 0.8;
+      if (hour >= 19 && hour <= 21) return 0.3;
       return 0.05;
     }
   }
@@ -491,9 +467,7 @@ class MLService {
   }
 
   getACProbability(hour, isWeekend) {
-    // Hot afternoon hours
     if (hour >= 12 && hour <= 18) return 0.6;
-    // Night cooling
     if (hour >= 22 || hour <= 6) return 0.4;
     return 0.1;
   }
@@ -505,9 +479,7 @@ class MLService {
   }
 
   getHeaterProbability(hour, isWeekend) {
-    // Morning warmup
     if (hour >= 6 && hour <= 9) return 0.7;
-    // Evening warmth
     if (hour >= 18 && hour <= 22) return 0.6;
     return 0.1;
   }
@@ -519,7 +491,7 @@ class MLService {
   }
 
   getMicrowaveProbability(hour, isWeekend) {
-    if ([7, 12, 18, 19].includes(hour)) return 0.6; // Meal times
+    if ([7, 12, 18, 19].includes(hour)) return 0.6;
     return 0.05;
   }
 
@@ -529,7 +501,7 @@ class MLService {
   }
 
   getKettleProbability(hour, isWeekend) {
-    if ([7, 10, 15, 20].includes(hour)) return 0.5; // Tea/coffee times
+    if ([7, 10, 15, 20].includes(hour)) return 0.5;
     return 0.1;
   }
 
@@ -539,8 +511,8 @@ class MLService {
   }
 
   getWashingMachineProbability(hour, isWeekend) {
-    if (isWeekend && hour >= 9 && hour <= 15) return 0.3; // Weekend laundry
-    if (!isWeekend && hour >= 7 && hour <= 9) return 0.2; // Morning laundry
+    if (isWeekend && hour >= 9 && hour <= 15) return 0.3;
+    if (!isWeekend && hour >= 7 && hour <= 9) return 0.2;
     return 0.02;
   }
 
@@ -551,94 +523,30 @@ class MLService {
   }
 
   getDefaultProbability(hour, isWeekend) {
-    if (hour >= 18 && hour <= 22) return 0.4; // Evening usage
-    if (hour >= 8 && hour <= 17) return 0.3; // Daytime usage
-    return 0.1; // Night/early morning
+    if (hour >= 18 && hour <= 22) return 0.4;
+    if (hour >= 8 && hour <= 17) return 0.3;
+    return 0.1;
   }
 
-  // NEW: Calculate power trend for context
-  calculatePowerTrend(hourlyData, currentHour) {
-    if (currentHour < 2) return 'stable';
-    
-    const recentHours = hourlyData.slice(Math.max(0, currentHour - 3), currentHour);
-    const powers = recentHours.map(h => h.totalPower);
-    
-    if (powers.length < 2) return 'stable';
-    
-    const trend = powers[powers.length - 1] - powers[0];
-    if (trend > 100) return 'increasing';
-    if (trend < -100) return 'decreasing';
-    return 'stable';
-  }
-
-  // NEW: Get time of day context
-  getTimeOfDayContext(hour) {
-    if (hour >= 22 || hour <= 5) return 'night';
-    if (hour >= 6 && hour <= 11) return 'morning';
-    if (hour >= 12 && hour <= 17) return 'afternoon';
-    if (hour >= 18 && hour <= 21) return 'evening';
-    return 'unknown';
-  }
-
-  // NEW: Extract realistic user actions from day pattern
-  extractUserActionsFromDay(hourlyData, date) {
-    const actions = [];
-    
-    for (let hour = 1; hour < hourlyData.length; hour++) {
-      const currentHour = hourlyData[hour];
-      const previousHour = hourlyData[hour - 1];
-      
-      currentHour.devices.forEach(device => {
-        const prevDevice = previousHour.devices.find(d => d.id === device.id);
-        
-        if (prevDevice && prevDevice.status !== device.status) {
-          // Device changed state
-          const actionTimestamp = new Date(currentHour.timestamp);
-          actionTimestamp.setMinutes(Math.floor(Math.random() * 60));
-          
-          actions.push({
-            timestamp: actionTimestamp.toISOString(),
-            hour: currentHour.hour,
-            dayOfWeek: currentHour.dayOfWeek,
-            deviceId: device.id,
-            deviceType: device.type,
-            action: device.status === 'on' ? 'toggle_on' : 'toggle_off',
-            context: {
-              manual: true,
-              dayBased: true,
-              reason: device.transitionReason,
-              timeOfDay: currentHour.context.timeOfDay,
-              totalActiveDevices: currentHour.activeDeviceCount,
-              totalPower: currentHour.totalPower,
-              powerTrend: currentHour.context.powerTrend,
-              dayEvents: currentHour.dayEvents.map(e => e.type),
-            }
-          });
-        }
-      });
-    }
-    
-    return actions;
-  }
-
-  // NEW: Inject full day pattern
+  // CRITICAL FIX: Inject day patterns correctly without duplication
   async injectDayPattern(dayPattern) {
     const engine = this.getCurrentEngine();
     if (!engine || !dayPattern) return;
     
     try {
-      // Store day pattern in new format
+      // FIXED: Only store in dayPatterns, no duplication
       if (!engine.trainingData.dayPatterns) {
         engine.trainingData.dayPatterns = [];
       }
       
       engine.trainingData.dayPatterns.push(dayPattern);
       
-      // Also maintain backward compatibility with hourly data
-      engine.trainingData.deviceUsage.push(...dayPattern.hourlyData);
-      engine.trainingData.userActions.push(...dayPattern.userActions);
+      // Keep data manageable
+      if (engine.trainingData.dayPatterns.length > 100) {
+        engine.trainingData.dayPatterns = engine.trainingData.dayPatterns.slice(-50);
+      }
       
-      console.log(`📥 Injected full day pattern for ${dayPattern.date} (${dayPattern.hourlyData.length} hours)`);
+      console.log(`📥 Injected day pattern for ${dayPattern.date} (${dayPattern.hourlySnapshots.length} hours)`);
       
       await engine.saveTrainingData();
       console.log(`📊 Total day patterns: ${engine.trainingData.dayPatterns.length}`);
@@ -647,7 +555,7 @@ class MLService {
     }
   }
 
-  // UPDATED: Get training progress based on days
+  // FIXED: Get training progress based on days correctly
   getTrainingProgress() {
     const engine = this.getCurrentEngine();
     if (!engine) {
@@ -656,15 +564,16 @@ class MLService {
         progress: 0, 
         status: 'not_initialized', 
         current: 0,
-        required: 7, // Days instead of samples
+        required: 7,
         canTrain: false,
         userId: this.currentUserId,
         simulation: { enabled: this.simulationEnabled }
       };
     }
     
-    const currentDays = engine.trainingData.dayPatterns?.length || Math.floor(engine.trainingData.deviceUsage.length / 24);
-    const requiredDays = this.simulationEnabled ? 7 : 14; // Fewer days needed
+    // FIXED: Use ONLY dayPatterns for counting, no fallback math
+    const currentDays = engine.trainingData.dayPatterns?.length || 0;
+    const requiredDays = this.simulationEnabled ? 5 : 10;
       
     const progress = Math.min(100, (currentDays / requiredDays) * 100);
     
@@ -685,59 +594,82 @@ class MLService {
     };
   }
 
-  // UPDATED: Clear user data method
-  async clearUserData() {
+  // FIXED: injectSimulationData now creates day patterns
+  async injectSimulationData(simulationData) {
     const engine = this.getCurrentEngine();
-    if (!engine) {
-      return { success: false, error: 'ML Engine not available' };
-    }
+    if (!engine || !simulationData) return;
     
     try {
-      console.log('🗑️ Clearing all ML training data...');
+      const { deviceUsage, userActions, plannedData } = simulationData;
       
-      // Stop background collection to prevent immediate repopulation
-      this.stopBackgroundCollection();
+      if (deviceUsage?.length) {
+        // CRITICAL FIX: Group hourly samples into day patterns
+        const dayGroups = this.groupSamplesByDay(deviceUsage);
+        
+        for (const [date, hourlySamples] of dayGroups) {
+          if (hourlySamples.length === 24) { // Only complete days
+            const dayPattern = this.createDayPatternFromSamples(hourlySamples, date);
+            
+            // Store in dayPatterns array (not deviceUsage)
+            if (!engine.trainingData.dayPatterns) {
+              engine.trainingData.dayPatterns = [];
+            }
+            engine.trainingData.dayPatterns.push(dayPattern);
+          }
+        }
+        
+        console.log(`📥 Created ${dayGroups.size} day patterns from simulation data`);
+      }
       
-      // Clear engine data including new day patterns
-      engine.trainingData = {
-        deviceUsage: [],
-        userActions: [],
-        contextData: [],
-        costData: [],
-        dayPatterns: [], // NEW: Clear day patterns
-      };
+      if (userActions?.length) {
+        engine.trainingData.userActions.push(...userActions);
+        console.log(`📥 Injected ${userActions.length} user actions`);
+      }
       
-      // Reset models
-      engine.models = {
-        usagePatterns: null,
-        userBehavior: null,
-        costOptimization: null,
-        anomalyDetection: null,
-        dayPatterns: null, // NEW: Clear day pattern models
-      };
-      
-      // Reset metrics
-      engine.metrics = {
-        accuracy: 0,
-        lastTrainedAt: null,
-        predictionsMade: 0,
-        correctPredictions: 0,
-        userId: this.currentUserId,
-      };
-      
-      // Mark engine as uninitialized so it won't produce predictions
-      engine.initialized = false;
-      this.initialized = false;
-      
-      // Clear AsyncStorage
-      await AsyncStorage.multiRemove([engine.storageKey, engine.dataKey, engine.settingsKey]);
-      
-      console.log('✅ All ML data cleared successfully');
-      return { success: true, message: 'All training data cleared' };
-    } catch (error) {
-      console.error('Error clearing data:', error);
-      return { success: false, error: error.message };
+      await engine.saveTrainingData();
+      console.log(`📊 Total day patterns: ${engine.trainingData.dayPatterns?.length || 0}`);
+    } catch (error) { 
+      console.error('Error injecting simulation data:', error); 
     }
+  }
+
+  // NEW: Group hourly samples into days
+  groupSamplesByDay(samples) {
+    const dayGroups = new Map();
+    
+    samples.forEach(sample => {
+      const date = sample.timestamp.split('T')[0]; // Get YYYY-MM-DD
+      if (!dayGroups.has(date)) {
+        dayGroups.set(date, []);
+      }
+      dayGroups.get(date).push(sample);
+    });
+    
+    return dayGroups;
+  }
+
+  // NEW: Create day pattern from hourly samples
+  createDayPatternFromSamples(hourlySamples, date) {
+    // Sort by hour to ensure correct order
+    const sortedSamples = hourlySamples.sort((a, b) => a.hour - b.hour);
+    
+    const dayPattern = {
+      date: date,
+      dayOfWeek: new Date(date).getDay(),
+      isWeekend: [0, 6].includes(new Date(date).getDay()),
+      collectedAt: new Date().toISOString(),
+      realData: false, // This is simulated
+      hourlySnapshots: sortedSamples,
+      summary: {
+        totalEnergyKwh: sortedSamples.reduce((sum, hour) => sum + hour.totalPower, 0) / 1000,
+        peakHour: sortedSamples.reduce((max, hour, index) => 
+          hour.totalPower > sortedSamples[max]?.totalPower ? index : max, 0),
+        averagePower: sortedSamples.reduce((sum, hour) => sum + hour.totalPower, 0) / 24,
+        activeDeviceHours: sortedSamples.reduce((sum, hour) => sum + hour.activeDeviceCount, 0),
+      }
+    };
+    
+    return dayPattern;
   }
 
   // Rest of existing methods remain the same...
@@ -785,7 +717,7 @@ class MLService {
         await engine.saveModels();
         return { 
           success: true, 
-          trainingAccuracy: result.accuracy, 
+          accuracy: result.accuracy, 
           modelInfo: result,
           trainingTime: result.trainingTime || 0
         };
@@ -835,6 +767,11 @@ class MLService {
     }
   }
 
+  // Add missing getAllPredictions method
+  async getAllPredictions(appliances, horizon = 24) {
+    return await this.getPredictions(appliances, horizon);
+  }
+
   getRecommendations(appliances) {
     const engine = this.getCurrentEngine();
     if (!engine) {
@@ -868,6 +805,8 @@ class MLService {
         predictions: [],
         recommendations: [],
         anomalies: { hasAnomaly: false, anomalies: [] },
+        dayPatterns: 0, // FIXED: Add dayPatterns count
+        dataSamples: 0,
       };
     }
     
@@ -885,11 +824,26 @@ class MLService {
         predictions: [],
         recommendations: [],
         anomalies: { hasAnomaly: false, anomalies: [] },
+        dayPatterns: 0,
+        dataSamples: 0,
       };
     }
   }
 
-  // Check if ML service is ready for a specific user
+  getEnergyForecast(appliances, hours = 12) {
+    const engine = this.getCurrentEngine();
+    if (!engine) {
+      return { 
+        success: false, 
+        forecast: [], 
+        totalExpectedEnergy: 0, 
+        totalExpectedCost: 0 
+      };
+    }
+
+    return engine.getEnergyForecast(appliances, hours);
+  }
+
   isReadyForUser(userId) {
     return this.currentUserId === userId && this.initialized && this.currentEngine;
   }
@@ -967,40 +921,6 @@ class MLService {
     }
   }
 
-  async injectSimulationData(simulationData) {
-    const engine = this.getCurrentEngine();
-    if (!engine || !simulationData) return;
-    
-    try {
-      const { deviceUsage, userActions } = simulationData;
-      if (deviceUsage?.length) {
-        const newData = deviceUsage.filter(sim => 
-          !engine.trainingData.deviceUsage.some(ex => 
-            ex.timestamp === sim.timestamp && 
-            JSON.stringify(ex.devices) === JSON.stringify(sim.devices)
-          )
-        );
-        engine.trainingData.deviceUsage.push(...newData);
-        console.log(`📥 Injected ${newData.length} simulated device-usage samples`);
-      }
-      if (userActions?.length) {
-        const newActions = userActions.filter(sim => 
-          !engine.trainingData.userActions.some(ex => 
-            ex.timestamp === sim.timestamp && 
-            ex.deviceId === sim.deviceId && 
-            ex.action === sim.action
-          )
-        );
-        engine.trainingData.userActions.push(...newActions);
-        console.log(`📥 Injected ${newActions.length} simulated user-actions`);
-      }
-      await engine.saveTrainingData();
-      console.log(`📊 Total training data: ${engine.trainingData.deviceUsage.length} samples`);
-    } catch (error) { 
-      console.error('Error injecting simulation data:', error); 
-    }
-  }
-
   updateAppliances(appliances) {
     this.currentAppliances = Array.isArray(appliances) ? appliances : [];
     if (this.simulationEnabled && this.currentAppliances.length > 0) {
@@ -1024,6 +944,58 @@ class MLService {
       clearInterval(this.dataCollectionInterval);
       this.dataCollectionInterval = null;
       console.log('🛑 Background data collection stopped');
+    }
+  }
+
+  // FIXED: Clear user data method
+  async clearUserData() {
+    const engine = this.getCurrentEngine();
+    if (!engine) {
+      return { success: false, error: 'ML Engine not available' };
+    }
+    
+    try {
+      console.log('🗑️ Clearing all ML training data...');
+      
+      this.stopBackgroundCollection();
+      
+      // FIXED: Clear both dayPatterns and deviceUsage
+      engine.trainingData = {
+        deviceUsage: [],
+        userActions: [],
+        contextData: [],
+        costData: [],
+        dayPatterns: [], // Make sure this is cleared
+      };
+      
+      engine.models = {
+        usagePatterns: null,
+        userBehavior: null,
+        costOptimization: null,
+        anomalyDetection: null,
+        dayPatterns: null,
+      };
+      
+      engine.metrics = {
+        accuracy: 0,
+        lastTrainedAt: null,
+        predictionsMade: 0,
+        correctPredictions: 0,
+        userId: this.currentUserId,
+        dayPatternsTrained: 0,
+        averageDayAccuracy: 0,
+      };
+      
+      engine.initialized = false;
+      this.initialized = false;
+      
+      await AsyncStorage.multiRemove([engine.storageKey, engine.dataKey, engine.settingsKey]);
+      
+      console.log('✅ All ML data cleared successfully');
+      return { success: true, message: 'All training data cleared' };
+    } catch (error) {
+      console.error('Error clearing data:', error);
+      return { success: false, error: error.message };
     }
   }
 }

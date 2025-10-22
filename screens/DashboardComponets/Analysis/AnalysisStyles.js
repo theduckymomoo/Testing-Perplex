@@ -276,151 +276,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
 
-  // Compact Prediction Styles
-  compactPredictionItem: {
-    backgroundColor: 'rgba(59, 130, 246, 0.05)',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: '#3b82f6',
-  },
-
-  compactPredictionHeader: {
-    marginBottom: 8,
-  },
-
-  deviceInfoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-
-  compactDeviceName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#ffffff',
-    flex: 1,
-  },
-
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-
-  compactStatus: {
-    fontSize: 14,
-  },
-
-  compactProbability: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#3b82f6',
-    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-
-  // Main Info Row Styles
-  mainInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-
-  compactPower: {
-    fontSize: 12,
-    color: '#d1d5db',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-
-  nextChangeCompact: {
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    flex: 1,
-  },
-
-  nextChangeCompactText: {
-    fontSize: 11,
-    color: '#10b981',
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-
-  energyCompact: {
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-
-  energyCompactText: {
-    fontSize: 11,
-    color: '#f59e0b',
-    fontWeight: '500',
-  },
-
-  // Expandable Details Styles
-  expandButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-    borderRadius: 6,
-    marginTop: 4,
-    gap: 4,
-  },
-
-  expandButtonText: {
-    fontSize: 12,
-    color: '#3b82f6',
-    fontWeight: '500',
-  },
-
-  expandedDetails: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(59, 130, 246, 0.2)',
-    gap: 8,
-  },
-
-  expandedSection: {
-    marginBottom: 8,
-  },
-
-  expandedLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#3b82f6',
-    marginBottom: 2,
-  },
-
-  expandedText: {
-    fontSize: 12,
-    color: '#d1d5db',
-    lineHeight: 16,
-  },
-
-  expandedSubText: {
-    fontSize: 11,
-    color: '#9ca3af',
-    marginTop: 2,
-  },
-
-  // Original Prediction Styles (Legacy)
+  // Enhanced Prediction Styles
   predictionItem: {
     backgroundColor: 'rgba(59, 130, 246, 0.05)',
     borderRadius: 12,
@@ -472,6 +328,93 @@ const styles = StyleSheet.create({
     color: '#d1d5db',
   },
 
+  // Next State Change Styles
+  nextChangeContainer: {
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#3b82f6',
+  },
+  
+  nextChangeLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#3b82f6',
+    marginBottom: 4,
+  },
+  
+  nextChangeTime: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginBottom: 4,
+  },
+  
+  nextChangeReason: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginBottom: 4,
+  },
+  
+  usageDuration: {
+    fontSize: 12,
+    color: '#10b981',
+    fontWeight: '500',
+  },
+
+  // Energy Impact Styles
+  energyImpactContainer: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#10b981',
+  },
+  
+  energyImpactLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#10b981',
+    marginBottom: 4,
+  },
+  
+  energyStats: {
+    fontSize: 13,
+    color: '#ffffff',
+    marginBottom: 4,
+  },
+  
+  efficiencyBadge: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#10b981',
+  },
+
+  // Typical Hours Styles
+  typicalHoursContainer: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#f59e0b',
+  },
+  
+  typicalHoursLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#f59e0b',
+    marginBottom: 4,
+  },
+  
+  typicalHoursList: {
+    fontSize: 12,
+    color: '#d1d5db',
+  },
+  
   predictionConfidence: {
     fontSize: 12,
     color: '#9ca3af',
@@ -677,6 +620,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  // Legacy/Additional Styles (if you have any existing ones)
+  // Add any existing styles from your current AnalysisStyles.js here
+  
   // Common utility styles
   row: {
     flexDirection: 'row',
@@ -772,6 +718,150 @@ const styles = StyleSheet.create({
   backgroundInfo: {
     backgroundColor: 'rgba(59, 130, 246, 0.1)',
   },
+// Compact Prediction Styles
+compactPredictionItem: {
+  backgroundColor: 'rgba(59, 130, 246, 0.05)',
+  borderRadius: 8,
+  padding: 12,
+  marginBottom: 8,
+  borderLeftWidth: 3,
+  borderLeftColor: '#3b82f6',
+},
+
+compactPredictionHeader: {
+  marginBottom: 8,
+},
+
+deviceInfoRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+},
+
+compactDeviceName: {
+  fontSize: 15,
+  fontWeight: '600',
+  color: '#ffffff',
+  flex: 1,
+},
+
+statusRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+},
+
+compactStatus: {
+  fontSize: 14,
+},
+
+compactProbability: {
+  fontSize: 12,
+  fontWeight: '600',
+  color: '#3b82f6',
+  backgroundColor: 'rgba(59, 130, 246, 0.15)',
+  paddingHorizontal: 8,
+  paddingVertical: 2,
+  borderRadius: 6,
+},
+
+// Main Info Row Styles
+mainInfoRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 8,
+  flexWrap: 'wrap',
+  gap: 8,
+},
+
+compactPower: {
+  fontSize: 12,
+  color: '#d1d5db',
+  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  paddingHorizontal: 8,
+  paddingVertical: 4,
+  borderRadius: 6,
+},
+
+nextChangeCompact: {
+  backgroundColor: 'rgba(16, 185, 129, 0.1)',
+  paddingHorizontal: 8,
+  paddingVertical: 4,
+  borderRadius: 6,
+  flex: 1,
+},
+
+nextChangeCompactText: {
+  fontSize: 11,
+  color: '#10b981',
+  fontWeight: '500',
+  textAlign: 'center',
+},
+
+energyCompact: {
+  backgroundColor: 'rgba(245, 158, 11, 0.1)',
+  paddingHorizontal: 8,
+  paddingVertical: 4,
+  borderRadius: 6,
+},
+
+energyCompactText: {
+  fontSize: 11,
+  color: '#f59e0b',
+  fontWeight: '500',
+},
+
+// Expandable Details Styles
+expandButton: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingVertical: 8,
+  paddingHorizontal: 12,
+  backgroundColor: 'rgba(59, 130, 246, 0.1)',
+  borderRadius: 6,
+  marginTop: 4,
+  gap: 4,
+},
+
+expandButtonText: {
+  fontSize: 12,
+  color: '#3b82f6',
+  fontWeight: '500',
+},
+
+expandedDetails: {
+  marginTop: 12,
+  paddingTop: 12,
+  borderTopWidth: 1,
+  borderTopColor: 'rgba(59, 130, 246, 0.2)',
+  gap: 8,
+},
+
+expandedSection: {
+  marginBottom: 8,
+},
+
+expandedLabel: {
+  fontSize: 11,
+  fontWeight: '600',
+  color: '#3b82f6',
+  marginBottom: 2,
+},
+
+expandedText: {
+  fontSize: 12,
+  color: '#d1d5db',
+  lineHeight: 16,
+},
+
+expandedSubText: {
+  fontSize: 11,
+  color: '#9ca3af',
+  marginTop: 2,
+},
+
 });
 
 export default styles;
