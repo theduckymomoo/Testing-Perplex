@@ -32,10 +32,11 @@ const AnalyticsTab = ({ appliances, stats }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [showDataViewer, setShowDataViewer] = useState(false);
   const [showSimulationControls, setShowSimulationControls] = useState(false);
+  const [expandedPredictions, setExpandedPredictions] = useState({});
   const [trainingProgress, setTrainingProgress] = useState({
     progress: 0,
     current: 0,
-    required: 7, // Days instead of hours
+    required: 7,
     canTrain: false,
     samplingMode: 'daily',
   });
@@ -50,7 +51,6 @@ const AnalyticsTab = ({ appliances, stats }) => {
 
       console.log(`Initializing day-based ML Service for user: ${user.id}`);
       
-      // Set current user and initialize
       mlService.setCurrentUser(user.id, supabase);
       const initResult = await mlService.initialize(user.id, supabase);
       
@@ -87,7 +87,6 @@ const AnalyticsTab = ({ appliances, stats }) => {
       initAndLoad();
     }
 
-    // Auto-refresh every 30 seconds if ML service is available
     const interval = setInterval(() => {
       if (mlService.hasCurrentUser()) {
         loadAnalytics();
@@ -105,10 +104,7 @@ const AnalyticsTab = ({ appliances, stats }) => {
         return;
       }
 
-      // Get ML insights
       const mlInsights = mlService.getMLInsights(appliances || []);
-      
-      // Get training progress
       const progress = mlService.getTrainingProgress();
       
       setInsights(mlInsights);
@@ -133,8 +129,22 @@ const AnalyticsTab = ({ appliances, stats }) => {
     }
   };
 
-  // Open Simulation Controls for creative freedom
-  const openTrainingSimulation = () => {
+  // Enhanced Quick Actions with better feedback
+  const handleRefresh = async () => {
+    Alert.alert('Refreshing Analytics', 'Updating all predictions and recommendations...');
+    await loadAnalytics();
+    Alert.alert('✅ Updated', 'Analytics data has been refreshed successfully!');
+  };
+
+  const handleViewData = () => {
+    if (!mlService.hasCurrentUser()) {
+      Alert.alert('ML Engine Required', 'Please initialize the ML engine first.');
+      return;
+    }
+    setShowDataViewer(true);
+  };
+
+  const handlePlanDay = () => {
     if (!mlService.hasCurrentUser()) {
       Alert.alert(
         'ML Engine Setup Required',
@@ -145,7 +155,7 @@ const AnalyticsTab = ({ appliances, stats }) => {
             onPress: async () => {
               const initialized = await initializeMLService();
               if (initialized) {
-                openTrainingSimulation();
+                setShowSimulationControls(true);
               }
             }
           }
@@ -157,17 +167,59 @@ const AnalyticsTab = ({ appliances, stats }) => {
     if (!appliances || appliances.length === 0) {
       Alert.alert(
         'No Devices Found',
-        'Please add some appliances first to generate training data.',
+        'Please add some appliances first to plan your day.',
         [{ text: 'OK' }]
       );
       return;
     }
 
-    // Open the creative simulation controls
     setShowSimulationControls(true);
   };
 
-  // Simple data generation for quick start
+  const handleClearData = () => {
+    Alert.alert(
+      'Clear Training Data',
+      'This will delete all ML training data and reset your personalized insights. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              await mlService.clearUserData();
+              
+              if (user?.id) {
+                mlService.setCurrentUser(user.id, supabase);
+                await mlService.initialize(user.id, supabase);
+              }
+              
+              await loadAnalytics();
+              Alert.alert('✅ Cleared', 'All training data has been cleared successfully.');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to clear data: ' + error.message);
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Toggle expanded state for predictions
+  const togglePredictionExpansion = (index) => {
+    setExpandedPredictions(prev => ({
+      ...prev,
+      [index]: !prev[index]
+    }));
+  };
+
+  const openTrainingSimulation = () => {
+    handlePlanDay();
+  };
+
   const startSimpleSimulation = async () => {
     try {
       if (!mlService.hasCurrentUser()) {
@@ -201,13 +253,11 @@ const AnalyticsTab = ({ appliances, stats }) => {
       setLoading(true);
       console.log('Starting simple day-based simulation with appliances:', appliances.length);
       
-      // Initialize simulation with current appliances
       const initResult = mlService.initializeSimulation(appliances);
       if (!initResult.success) {
         throw new Error(initResult.error);
       }
 
-      // Fast-forward 7 days of simulation data
       const result = await mlService.fastForwardSimulation(7, (progress) => {
         console.log(`Day simulation progress: ${progress.progress}%`);
       });
@@ -264,45 +314,11 @@ const AnalyticsTab = ({ appliances, stats }) => {
   };
 
   const clearTrainingData = async () => {
-    Alert.alert(
-      'Clear Training Data',
-      'Are you sure you want to delete all ML training data? This will reset your personalized insights and cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear All',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setLoading(true);
-              
-              // Clear all data
-              await mlService.clearUserData();
-              
-              // Reinitialize clean engine
-              if (user?.id) {
-                mlService.setCurrentUser(user.id, supabase);
-                await mlService.initialize(user.id, supabase);
-              }
-              
-              // Force reload analytics to clear UI state
-              await loadAnalytics();
-              
-              Alert.alert('Success', 'All training data has been cleared. You can now generate new day-based simulation data.');
-            } catch (error) {
-              Alert.alert('Error', 'Failed to clear data: ' + error.message);
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
+    handleClearData();
   };
 
   const handleSimulationUpdate = (update) => {
     console.log('Day simulation update:', update);
-    // Refresh analytics when simulation updates
     loadAnalytics();
   };
 
@@ -369,7 +385,6 @@ const AnalyticsTab = ({ appliances, stats }) => {
         </View>
       )}
 
-      {/* Always show simulation options */}
       <View style={styles.simulationOptionsSection}>
         <Text style={styles.sectionSubtitle}>Day-Based Data Generation</Text>
         <View style={styles.trainingActions}>
@@ -384,7 +399,7 @@ const AnalyticsTab = ({ appliances, stats }) => {
           
           <TouchableOpacity 
             style={[styles.dataViewerButton, !mlService.hasCurrentUser() && styles.disabledButton]}
-            onPress={openTrainingSimulation}
+            onPress={handlePlanDay}
             disabled={!mlService.hasCurrentUser()}
           >
             <MaterialIcons name="tune" size={16} color="#10b981" />
@@ -393,7 +408,6 @@ const AnalyticsTab = ({ appliances, stats }) => {
         </View>
       </View>
 
-      {/* Model Training Section - Always show when data is available */}
       {trainingProgress.canTrain && (
         <View style={styles.modelTrainingSection}>
           <Text style={styles.sectionSubtitle}>Model Training Ready</Text>
@@ -427,28 +441,29 @@ const AnalyticsTab = ({ appliances, stats }) => {
         </View>
       </View>
 
-      <TouchableOpacity style={styles.clearButton} onPress={clearTrainingData}>
+      <TouchableOpacity style={styles.clearButton} onPress={handleClearData}>
         <MaterialIcons name="delete-outline" size={16} color="#ef4444" />
         <Text style={styles.clearButtonText}>Clear Training Data</Text>
       </TouchableOpacity>
     </View>
   );
 
+  // UPDATED: Compact Predictions Display
   const renderPredictions = () => {
     if (!insights.predictions || insights.predictions.length === 0) {
       return (
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <MaterialIcons name="psychology" size={20} color="#3b82f6" />
-            <Text style={styles.cardTitle}>Day-Based Device Predictions</Text>
+            <Text style={styles.cardTitle}>Device Predictions & Timing</Text>
           </View>
           <View style={styles.emptyState}>
             <MaterialIcons name="psychology" size={48} color="#6c757d" />
             <Text style={styles.emptyText}>No predictions available</Text>
             <Text style={styles.emptySubText}>
               {!mlService.hasCurrentUser() 
-                ? 'Setting up day-based ML engine...' 
-                : 'Generate day patterns to get predictions'
+                ? 'Setting up ML engine...' 
+                : 'Generate patterns to get predictions'
               }
             </Text>
           </View>
@@ -460,38 +475,109 @@ const AnalyticsTab = ({ appliances, stats }) => {
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <MaterialIcons name="psychology" size={20} color="#3b82f6" />
-          <Text style={styles.cardTitle}>Day-Based Device Predictions</Text>
+          <Text style={styles.cardTitle}>Device Predictions & Timing</Text>
         </View>
         <Text style={styles.cardSubtitle}>
-          Based on {insights.dayPatterns} day patterns • {insights.samplingMode || 'daily'} sampling
+          Based on {insights.dayPatterns} day patterns
         </Text>
         
         {insights.predictions.slice(0, 5).map((prediction, index) => (
-          <View key={index} style={styles.predictionItem}>
-            <View style={styles.predictionHeader}>
-              <Text style={styles.predictionDevice}>{prediction.deviceName}</Text>
-              <View style={styles.predictionBadge}>
-                <Text style={styles.predictionProbability}>
-                  {Math.round(prediction.prediction.probability * 100)}%
-                </Text>
+          <View key={index} style={styles.compactPredictionItem}>
+            {/* Device Header Row */}
+            <View style={styles.compactPredictionHeader}>
+              <View style={styles.deviceInfoRow}>
+                <Text style={styles.compactDeviceName}>{prediction.deviceName}</Text>
+                <View style={styles.statusRow}>
+                  <Text style={styles.compactStatus}>
+                    {prediction.prediction.willBeActive ? '🟢' : '🔴'}
+                  </Text>
+                  <Text style={styles.compactProbability}>
+                    {Math.round(prediction.prediction.probability * 100)}%
+                  </Text>
+                </View>
               </View>
             </View>
             
-            <View style={styles.predictionDetails}>
-              <Text style={styles.predictionStatus}>
-                {prediction.prediction.willBeActive ? '🟢 Likely ON' : '🔴 Likely OFF'}
+            {/* Main Info Row */}
+            <View style={styles.mainInfoRow}>
+              <Text style={styles.compactPower}>
+                {Math.round(prediction.prediction.expectedPower)}W
               </Text>
-              <Text style={styles.predictionPower}>
-                {Math.round(prediction.prediction.expectedPower)}W expected
-              </Text>
-              <Text style={styles.predictionConfidence}>
-                Confidence: {Math.round(prediction.prediction.confidence * 100)}% 
-                {prediction.prediction.basedOnDays ? ` (${prediction.prediction.basedOnDays} days)` : ''}
-              </Text>
-              <Text style={styles.predictionMethod}>
-                Method: {prediction.prediction.predictionMethod === 'day_based' ? 'Day patterns' : 'Hourly fallback'}
-              </Text>
+              
+              {/* Next Change - Compact */}
+              {prediction.prediction.nextStateChange && (
+                <View style={styles.nextChangeCompact}>
+                  <Text style={styles.nextChangeCompactText}>
+                    {prediction.prediction.nextStateChange.action === 'turn_on' ? '🟢' : '🔴'} 
+                    {prediction.prediction.nextStateChange.timeLabel} 
+                    ({prediction.prediction.nextStateChange.hoursFromNow}h)
+                  </Text>
+                </View>
+              )}
+              
+              {/* Energy Impact - Compact */}
+              {prediction.prediction.energyImpact && (
+                <View style={styles.energyCompact}>
+                  <Text style={styles.energyCompactText}>
+                    {prediction.prediction.energyImpact.totalHoursOn}h • 
+                    {prediction.prediction.energyImpact.totalEnergyKwh}kWh • 
+                    R{prediction.prediction.energyImpact.totalCost}
+                  </Text>
+                </View>
+              )}
             </View>
+            
+            {/* Expandable Details */}
+            <TouchableOpacity 
+              style={styles.expandButton}
+              onPress={() => togglePredictionExpansion(index)}
+            >
+              <Text style={styles.expandButtonText}>
+                {expandedPredictions[index] ? 'Less' : 'More'} Details
+              </Text>
+              <MaterialIcons 
+                name={expandedPredictions[index] ? 'expand-less' : 'expand-more'} 
+                size={16} 
+                color="#3b82f6" 
+              />
+            </TouchableOpacity>
+            
+            {/* Expanded Details */}
+            {expandedPredictions[index] && (
+              <View style={styles.expandedDetails}>
+                {prediction.prediction.nextStateChange && (
+                  <View style={styles.expandedSection}>
+                    <Text style={styles.expandedLabel}>Next Change Details:</Text>
+                    <Text style={styles.expandedText}>
+                      {prediction.prediction.nextStateChange.reason}
+                    </Text>
+                    {prediction.prediction.nextStateChange.estimatedDuration && (
+                      <Text style={styles.expandedSubText}>
+                        Duration: {prediction.prediction.nextStateChange.estimatedDuration.description}
+                      </Text>
+                    )}
+                  </View>
+                )}
+                
+                {prediction.prediction.typicalUsageHours && prediction.prediction.typicalUsageHours.length > 0 && (
+                  <View style={styles.expandedSection}>
+                    <Text style={styles.expandedLabel}>Typical Hours:</Text>
+                    <Text style={styles.expandedText}>
+                      {prediction.prediction.typicalUsageHours.slice(0, 8).map(h => h.timeLabel).join(', ')}
+                    </Text>
+                  </View>
+                )}
+                
+                <View style={styles.expandedSection}>
+                  <Text style={styles.expandedLabel}>Confidence & Method:</Text>
+                  <Text style={styles.expandedText}>
+                    {Math.round(prediction.prediction.confidence * 100)}% confidence • 
+                    {prediction.prediction.predictionMethod === 'day_based' ? 'Day patterns' : 'Hourly fallback'}
+                    {prediction.prediction.basedOnDays && ` • ${prediction.prediction.basedOnDays} days`}
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
         ))}
       </View>
@@ -630,6 +716,7 @@ const AnalyticsTab = ({ appliances, stats }) => {
     );
   };
 
+  // UPDATED: Working Quick Actions
   const renderQuickActions = () => (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
@@ -638,25 +725,30 @@ const AnalyticsTab = ({ appliances, stats }) => {
       </View>
       
       <View style={styles.quickActionsGrid}>
-        <TouchableOpacity style={styles.quickAction} onPress={loadAnalytics}>
+        <TouchableOpacity style={styles.quickAction} onPress={handleRefresh}>
           <MaterialIcons name="refresh" size={24} color="#10b981" />
           <Text style={styles.quickActionText}>Refresh</Text>
         </TouchableOpacity>
         
         <TouchableOpacity 
           style={[styles.quickAction, !mlService.hasCurrentUser() && styles.disabledAction]}
-          onPress={openTrainingSimulation}
+          onPress={handlePlanDay}
+          disabled={!mlService.hasCurrentUser()}
         >
           <MaterialIcons name="tune" size={24} color="#8b5cf6" />
           <Text style={styles.quickActionText}>Plan Day</Text>
         </TouchableOpacity>
         
-        <TouchableOpacity style={styles.quickAction} onPress={() => setShowDataViewer(true)}>
+        <TouchableOpacity 
+          style={[styles.quickAction, !mlService.hasCurrentUser() && styles.disabledAction]}
+          onPress={handleViewData}
+          disabled={!mlService.hasCurrentUser()}
+        >
           <MaterialIcons name="analytics" size={24} color="#f59e0b" />
           <Text style={styles.quickActionText}>View Data</Text>
         </TouchableOpacity>
         
-        <TouchableOpacity style={styles.quickAction} onPress={clearTrainingData}>
+        <TouchableOpacity style={styles.quickAction} onPress={handleClearData}>
           <MaterialIcons name="delete" size={24} color="#ef4444" />
           <Text style={styles.quickActionText}>Clear</Text>
         </TouchableOpacity>

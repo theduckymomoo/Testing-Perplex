@@ -2,55 +2,61 @@ import { StyleSheet, Dimensions } from 'react-native';
 
 const { width } = Dimensions.get('window');
 
-export default StyleSheet.create({
-  // Base Container Styles - Match Dashboard
+const styles = StyleSheet.create({
+  // Base Container Styles
   container: {
     flex: 1,
     backgroundColor: '#0a0a0b',
   },
+  
+  scrollView: {
+    flex: 1,
+  },
+  
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#0a0a0b',
   },
+  
   loadingText: {
-    color: '#6c757d',
     marginTop: 16,
     fontSize: 16,
-    fontWeight: '500',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 24,
+    color: '#9ca3af',
+    textAlign: 'center',
   },
 
-  // Header Styles - Match Dashboard Header
+  // Header Styles
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#18181b',
-    backgroundColor: '#0a0a0b',
+    marginBottom: 24,
   },
+  
   titleContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 12,
   },
+  
   title: {
-    fontSize: 18,
+    fontSize: 24,
     fontWeight: '700',
     color: '#ffffff',
-    marginLeft: 8,
+    marginLeft: 12,
   },
+  
   statusContainer: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 12,
   },
+  
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -58,408 +64,583 @@ export default StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 12,
-    gap: 6,
   },
+  
   statusDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
+    marginRight: 8,
   },
+  
   statusText: {
-    color: '#ffffff',
     fontSize: 12,
-    fontWeight: '700',
-  },
-  accuracyText: {
-    color: '#10b981',
-    fontSize: 11,
-    marginTop: 4,
     fontWeight: '600',
+    color: '#ffffff',
   },
+  
+  accuracyText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#10b981',
+  },
+  
   samplingModeText: {
-    color: '#3b82f6',
-    fontSize: 10,
-    marginTop: 2,
-    fontWeight: '500',
+    fontSize: 12,
+    color: '#9ca3af',
   },
 
-  // Card Styles - Match Dashboard Cards
+  // Card Styles
   card: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    marginHorizontal: 20,
-    marginVertical: 8,
+    backgroundColor: '#18181b',
     borderRadius: 16,
     padding: 20,
+    marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#18181b',
+    borderColor: '#27272a',
   },
+  
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 16,
   },
+  
   cardTitle: {
-    color: '#ffffff',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
-    marginLeft: 8,
+    color: '#ffffff',
+    marginLeft: 12,
   },
+  
   cardSubtitle: {
-    color: '#6c757d',
-    fontSize: 11,
-    fontWeight: '500',
-    marginBottom: 12,
-    marginTop: -8,
-  },
-
-  // Engine Status Card
-  engineStatusCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginBottom: 12,
-    gap: 8,
-  },
-  engineStatusText: {
-    color: '#f59e0b',
-    fontSize: 12,
-    fontWeight: '500',
-    flex: 1,
-  },
-
-  // Training Progress Styles
-  progressContainer: {
+    fontSize: 14,
+    color: '#9ca3af',
     marginBottom: 16,
   },
+
+  // Progress Styles
+  progressContainer: {
+    marginBottom: 20,
+  },
+  
   progressBar: {
     height: 8,
-    backgroundColor: '#18181b',
+    backgroundColor: '#27272a',
     borderRadius: 4,
-    overflow: 'hidden',
     marginBottom: 8,
   },
+  
   progressFill: {
     height: '100%',
     backgroundColor: '#10b981',
     borderRadius: 4,
   },
+  
   progressText: {
-    color: '#6c757d',
-    fontSize: 12,
-    textAlign: 'center',
-    fontWeight: '500',
-  },
-  progressSubText: {
-    color: '#4a5568',
-    fontSize: 10,
-    textAlign: 'center',
-    fontWeight: '500',
-    marginTop: 4,
-  },
-
-  // Section organization styles
-  simulationOptionsSection: {
-    marginBottom: 16,
-  },
-  modelTrainingSection: {
-    marginBottom: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#18181b',
-  },
-  sectionSubtitle: {
-    color: '#d1d5db',
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '600',
-    marginBottom: 8,
-    textAlign: 'center',
+    color: '#ffffff',
+    marginBottom: 4,
+  },
+  
+  progressSubText: {
+    fontSize: 12,
+    color: '#9ca3af',
   },
 
-  // Action Button Styles
+  // Engine Status Styles
+  engineStatusCard: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderLeftWidth: 3,
+    borderLeftColor: '#f59e0b',
+  },
+  
+  engineStatusText: {
+    fontSize: 12,
+    color: '#f59e0b',
+    marginLeft: 8,
+    flex: 1,
+  },
+
+  // Simulation & Training Styles
+  simulationOptionsSection: {
+    marginBottom: 20,
+  },
+  
+  sectionSubtitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#d1d5db',
+    marginBottom: 12,
+  },
+  
   trainingActions: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 12,
   },
+  
   actionButton: {
+    backgroundColor: '#10b981',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#10b981',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 12,
+    borderRadius: 8,
     flex: 1,
     justifyContent: 'center',
   },
+  
   disabledButton: {
     backgroundColor: '#374151',
-    opacity: 0.6,
+    opacity: 0.5,
   },
+  
   actionButtonText: {
     color: '#ffffff',
+    fontSize: 14,
     fontWeight: '600',
-    marginLeft: 4,
-    fontSize: 13,
+    marginLeft: 8,
   },
+  
   dataViewerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
     borderWidth: 1,
     borderColor: '#10b981',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
     flex: 1,
     justifyContent: 'center',
   },
+  
   dataViewerButtonText: {
     color: '#10b981',
+    fontSize: 14,
     fontWeight: '600',
-    marginLeft: 4,
-    fontSize: 13,
+    marginLeft: 8,
+  },
+  
+  modelTrainingSection: {
+    marginBottom: 20,
   },
 
   // Stats Styles
   dataStats: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#18181b',
-    marginBottom: 16,
+    justifyContent: 'space-between',
+    marginBottom: 20,
   },
+  
   statItem: {
     alignItems: 'center',
+    flex: 1,
   },
+  
   statValue: {
-    color: '#10b981',
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
+    color: '#10b981',
   },
+  
   statLabel: {
-    color: '#6c757d',
-    fontSize: 11,
-    marginTop: 2,
-    fontWeight: '500',
+    fontSize: 12,
+    color: '#9ca3af',
+    marginTop: 4,
+    textAlign: 'center',
   },
 
-  // Clear Button Style
+  // Clear Button Styles
   clearButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#18181b',
+    borderRadius: 8,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderWidth: 1,
+    borderColor: '#ef4444',
   },
+  
   clearButtonText: {
     color: '#ef4444',
-    fontWeight: '600',
-    marginLeft: 4,
     fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+
+  // Compact Prediction Styles
+  compactPredictionItem: {
+    backgroundColor: 'rgba(59, 130, 246, 0.05)',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#3b82f6',
+  },
+
+  compactPredictionHeader: {
+    marginBottom: 8,
+  },
+
+  deviceInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  compactDeviceName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#ffffff',
+    flex: 1,
+  },
+
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  compactStatus: {
+    fontSize: 14,
+  },
+
+  compactProbability: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#3b82f6',
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+
+  // Main Info Row Styles
+  mainInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+
+  compactPower: {
+    fontSize: 12,
+    color: '#d1d5db',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+
+  nextChangeCompact: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    flex: 1,
+  },
+
+  nextChangeCompactText: {
+    fontSize: 11,
+    color: '#10b981',
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+
+  energyCompact: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+
+  energyCompactText: {
+    fontSize: 11,
+    color: '#f59e0b',
+    fontWeight: '500',
+  },
+
+  // Expandable Details Styles
+  expandButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderRadius: 6,
+    marginTop: 4,
+    gap: 4,
+  },
+
+  expandButtonText: {
+    fontSize: 12,
+    color: '#3b82f6',
+    fontWeight: '500',
+  },
+
+  expandedDetails: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(59, 130, 246, 0.2)',
+    gap: 8,
+  },
+
+  expandedSection: {
+    marginBottom: 8,
+  },
+
+  expandedLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#3b82f6',
+    marginBottom: 2,
+  },
+
+  expandedText: {
+    fontSize: 12,
+    color: '#d1d5db',
+    lineHeight: 16,
+  },
+
+  expandedSubText: {
+    fontSize: 11,
+    color: '#9ca3af',
+    marginTop: 2,
+  },
+
+  // Original Prediction Styles (Legacy)
+  predictionItem: {
+    backgroundColor: 'rgba(59, 130, 246, 0.05)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#3b82f6',
+  },
+  
+  predictionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  
+  predictionDevice: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#ffffff',
+    flex: 1,
+  },
+  
+  predictionBadge: {
+    backgroundColor: '#3b82f6',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  
+  predictionProbability: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  
+  predictionDetails: {
+    gap: 8,
+  },
+  
+  predictionStatus: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  
+  predictionPower: {
+    fontSize: 13,
+    color: '#d1d5db',
+  },
+
+  predictionConfidence: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginTop: 4,
+  },
+  
+  predictionMethod: {
+    fontSize: 11,
+    color: '#6b7280',
+    fontStyle: 'italic',
   },
 
   // Empty State Styles
   emptyState: {
     alignItems: 'center',
-    paddingVertical: 32,
+    padding: 32,
   },
+  
   emptyText: {
-    color: '#6c757d',
     fontSize: 16,
     fontWeight: '600',
-    marginTop: 12,
-  },
-  emptySubText: {
-    color: '#4a5568',
-    fontSize: 12,
-    marginTop: 4,
-    fontWeight: '500',
+    color: '#9ca3af',
+    marginTop: 16,
     textAlign: 'center',
   },
-
-  // Prediction Styles
-  predictionItem: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#18181b',
-  },
-  predictionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  predictionDevice: {
-    color: '#ffffff',
+  
+  emptySubText: {
     fontSize: 14,
-    fontWeight: '600',
-    flex: 1,
-  },
-  predictionBadge: {
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  predictionProbability: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  predictionDetails: {
-    gap: 4,
-  },
-  predictionStatus: {
-    color: '#d1d5db',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  predictionPower: {
-    color: '#6c757d',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  predictionConfidence: {
-    color: '#4a5568',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  predictionMethod: {
-    color: '#8b5cf6',
-    fontSize: 10,
-    fontWeight: '500',
-    fontStyle: 'italic',
+    color: '#6b7280',
+    marginTop: 8,
+    textAlign: 'center',
   },
 
   // Recommendation Styles
   recommendationItem: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    backgroundColor: 'rgba(245, 158, 11, 0.05)',
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#18181b',
+    borderLeftWidth: 4,
+    borderLeftColor: '#f59e0b',
   },
+  
   recommendationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 8,
+    gap: 8,
   },
+  
   recommendationType: {
-    color: '#f59e0b',
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '600',
-    marginLeft: 8,
+    color: '#ffffff',
     flex: 1,
     textTransform: 'capitalize',
   },
+  
   savings: {
-    color: '#10b981',
     fontSize: 12,
     fontWeight: '700',
-  },
-  recommendationText: {
-    color: '#d1d5db',
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  recommendationBasis: {
-    color: '#8b5cf6',
-    fontSize: 10,
-    fontWeight: '500',
-    fontStyle: 'italic',
-    marginBottom: 8,
-  },
-  affectedDevices: {
-    borderTopWidth: 1,
-    borderTopColor: '#18181b',
-    paddingTop: 8,
-  },
-  devicesLabel: {
-    color: '#6c757d',
-    fontSize: 11,
-    marginBottom: 4,
-    fontWeight: '500',
-  },
-  devicesList: {
-    color: '#4a5568',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-
-  // Normal Status Styles
-  normalStatus: {
-    alignItems: 'center',
-    paddingVertical: 24,
-  },
-  normalText: {
     color: '#10b981',
-    fontSize: 16,
-    fontWeight: '600',
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  
+  recommendationText: {
+    fontSize: 14,
+    color: '#d1d5db',
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  
+  recommendationBasis: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginBottom: 8,
+  },
+  
+  affectedDevices: {
     marginTop: 8,
   },
-  normalSubText: {
-    color: '#6c757d',
-    fontSize: 11,
-    marginTop: 4,
-    fontWeight: '500',
+  
+  devicesLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#f59e0b',
+    marginBottom: 4,
+  },
+  
+  devicesList: {
+    fontSize: 12,
+    color: '#d1d5db',
   },
 
   // Anomaly Styles
-  anomalyItem: {
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#18181b',
+  normalStatus: {
+    alignItems: 'center',
+    padding: 24,
   },
+  
+  normalText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#10b981',
+    marginTop: 12,
+  },
+  
+  normalSubText: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginTop: 4,
+  },
+  
+  anomalyItem: {
+    backgroundColor: 'rgba(239, 68, 68, 0.05)',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#ef4444',
+  },
+  
   anomalyHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 8,
+    gap: 8,
   },
+  
   anomalyType: {
-    color: '#ef4444',
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '600',
-    marginLeft: 8,
+    color: '#ffffff',
     flex: 1,
     textTransform: 'capitalize',
   },
+  
   severityBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  anomalyMessage: {
-    color: '#d1d5db',
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 4,
-    fontWeight: '500',
-  },
-  anomalyValue: {
-    color: '#6c757d',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  anomalyBasis: {
-    color: '#8b5cf6',
     fontSize: 10,
-    fontWeight: '500',
-    fontStyle: 'italic',
+    fontWeight: '700',
+    color: '#ffffff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    textTransform: 'uppercase',
+  },
+  
+  anomalyMessage: {
+    fontSize: 13,
+    color: '#d1d5db',
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+  
+  anomalyValue: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginBottom: 4,
+  },
+  
+  anomalyBasis: {
+    fontSize: 11,
+    color: '#6b7280',
     marginTop: 8,
     textAlign: 'center',
+    fontStyle: 'italic',
   },
 
   // Quick Actions Styles
@@ -468,24 +649,129 @@ export default StyleSheet.create({
     flexWrap: 'wrap',
     gap: 12,
   },
+  
   quickAction: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    backgroundColor: 'rgba(139, 92, 246, 0.1)',
     borderRadius: 12,
     padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 80,
     flex: 1,
-    minWidth: (width - 64) / 2,
+    minWidth: (width - 80) / 2,
     borderWidth: 1,
-    borderColor: '#18181b',
+    borderColor: 'rgba(139, 92, 246, 0.2)',
   },
+  
   disabledAction: {
+    backgroundColor: 'rgba(75, 85, 99, 0.1)',
+    borderColor: 'rgba(75, 85, 99, 0.2)',
     opacity: 0.5,
   },
+  
   quickActionText: {
-    color: '#d1d5db',
-    fontSize: 11,
-    marginTop: 6,
+    fontSize: 12,
     fontWeight: '600',
+    color: '#8b5cf6',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+
+  // Common utility styles
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  
+  spaceBetween: {
+    justifyContent: 'space-between',
+  },
+  
+  flexOne: {
+    flex: 1,
+  },
+  
+  textCenter: {
+    textAlign: 'center',
+  },
+  
+  marginVerticalSmall: {
+    marginVertical: 4,
+  },
+  
+  marginVerticalMedium: {
+    marginVertical: 8,
+  },
+  
+  marginVerticalLarge: {
+    marginVertical: 16,
+  },
+  
+  paddingHorizontalSmall: {
+    paddingHorizontal: 8,
+  },
+  
+  paddingHorizontalMedium: {
+    paddingHorizontal: 12,
+  },
+  
+  paddingHorizontalLarge: {
+    paddingHorizontal: 16,
+  },
+
+  // Color utility styles
+  textPrimary: {
+    color: '#ffffff',
+  },
+  
+  textSecondary: {
+    color: '#d1d5db',
+  },
+  
+  textMuted: {
+    color: '#9ca3af',
+  },
+  
+  textSuccess: {
+    color: '#10b981',
+  },
+  
+  textWarning: {
+    color: '#f59e0b',
+  },
+  
+  textError: {
+    color: '#ef4444',
+  },
+  
+  textInfo: {
+    color: '#3b82f6',
+  },
+
+  // Background utility styles
+  backgroundPrimary: {
+    backgroundColor: '#18181b',
+  },
+  
+  backgroundSecondary: {
+    backgroundColor: '#27272a',
+  },
+  
+  backgroundSuccess: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+  },
+  
+  backgroundWarning: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+  },
+  
+  backgroundError: {
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+  },
+  
+  backgroundInfo: {
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
   },
 });
+
+export default styles;
