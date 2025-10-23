@@ -9,6 +9,18 @@ class MLService {
     this.initialized = false;
     this.dataCollectionInterval = null;
     this.currentAppliances = [];
+    
+    // Operation locks to prevent conflicts
+    this.operationLocks = {
+      training: false,
+      dataCollection: false,
+      simulation: false,
+      cleanup: false
+    };
+    
+    // Enhanced error tracking
+    this.errorHistory = [];
+    this.maxErrorHistory = 50;
 
     this.simulationEnabled = true;
     this.minSimulatedData = 100;
@@ -24,47 +36,102 @@ class MLService {
       samplingMode: 'daily',
       hoursPerSample: 24,
       contextWindow: 3,
+      maxMemoryUsage: 100 * 1024 * 1024, // 100MB limit
+      maxTrainingDataSize: 1000,
+      dataArchiveThreshold: 500,
     };
+
+    // Bind cleanup methods
+    this.cleanup = this.cleanup.bind(this);
+    this.handleAppStateChange = this.handleAppStateChange.bind(this);
   }
 
-  setCurrentUser(userId, supabase = null) {
-    if (!userId) {
-      console.warn('⚠️ Cannot set ML engine: No user ID provided');
-      this.currentUserId = null;
-      this.currentEngine = null;
-      this.initialized = false;
-      return;
-    }
-
-    if (this.currentUserId === userId && this.currentEngine) {
-      console.log(`✅ Already using ML engine for user: ${userId}`);
-      return;
-    }
-
-    console.log(`👤 Switching to user ML engine: ${userId}`);
-    this.currentUserId = userId;
+  // FIXED: Enhanced error logging with history
+  logError(operation, error, context = {}) {
+    const errorEntry = {
+      timestamp: new Date().toISOString(),
+      operation,
+      error: error.message || error,
+      context,
+      userId: this.currentUserId
+    };
     
-    if (!this.userEngines.has(userId)) {
-      this.currentEngine = new MLEngine(userId, {
-        minDataPoints: 7, // Days
-        predictionHorizon: 24,
-        retrainInterval: 3600000,
-        confidenceThreshold: 0.7,
-        samplingMode: 'daily',
-      });
+    this.errorHistory.unshift(errorEntry);
+    if (this.errorHistory.length > this.maxErrorHistory) {
+      this.errorHistory = this.errorHistory.slice(0, this.maxErrorHistory);
+    }
+    
+    console.error(`❌ MLService[${operation}]:`, error, context);
+  }
+
+  // FIXED: Operation lock management to prevent conflicts
+  async acquireLock(operation, timeout = 30000) {
+    const startTime = Date.now();
+    
+    while (this.operationLocks[operation]) {
+      if (Date.now() - startTime > timeout) {
+        throw new Error(`Operation lock timeout for: ${operation}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    this.operationLocks[operation] = true;
+    console.log(`🔒 Acquired lock: ${operation}`);
+  }
+
+  releaseLock(operation) {
+    this.operationLocks[operation] = false;
+    console.log(`🔓 Released lock: ${operation}`);
+  }
+
+  // FIXED: Enhanced user management with proper cleanup
+  async setCurrentUser(userId, supabase = null) {
+    try {
+      if (!userId) {
+        console.warn('⚠️ Cannot set ML engine: No user ID provided');
+        await this.cleanup();
+        return { success: false, error: 'No user ID provided' };
+      }
+
+      if (this.currentUserId === userId && this.currentEngine) {
+        console.log(`✅ Already using ML engine for user: ${userId}`);
+        return { success: true, existing: true };
+      }
+
+      // Cleanup previous user
+      if (this.currentUserId && this.currentUserId !== userId) {
+        await this.cleanup(false); // Don't clear data, just cleanup operations
+      }
+
+      console.log(`👤 Switching to user ML engine: ${userId}`);
+      this.currentUserId = userId;
       
-      if (supabase && this.config.cloudSyncEnabled) {
-        this.currentEngine.setSupabaseClient(supabase);
+      if (!this.userEngines.has(userId)) {
+        this.currentEngine = new MLEngine(userId, {
+          minDataPoints: 7,
+          predictionHorizon: 24,
+          retrainInterval: 3600000,
+          confidenceThreshold: 0.7,
+          samplingMode: 'daily',
+        });
+        
+        if (supabase && this.config.cloudSyncEnabled) {
+          this.currentEngine.setSupabaseClient(supabase);
+        }
+        
+        this.userEngines.set(userId, this.currentEngine);
+        console.log(`✅ Created new ML engine for user: ${userId}`);
+      } else {
+        this.currentEngine = this.userEngines.get(userId);
+        console.log(`✅ Loaded existing ML engine for user: ${userId}`);
       }
       
-      this.userEngines.set(userId, this.currentEngine);
-      console.log(`✅ Created new ML engine for user: ${userId}`);
-    } else {
-      this.currentEngine = this.userEngines.get(userId);
-      console.log(`✅ Loaded existing ML engine for user: ${userId}`);
+      this.initialized = false;
+      return { success: true, existing: false };
+    } catch (error) {
+      this.logError('setCurrentUser', error, { userId });
+      return { success: false, error: error.message };
     }
-    
-    this.initialized = false;
   }
 
   getCurrentEngine() {
@@ -75,148 +142,265 @@ class MLService {
     return this.currentEngine;
   }
 
-  // FIXED: Single data collection method that creates BOTH dayPatterns AND hourly data
-  async collectData(appliances) {
-    const engine = this.getCurrentEngine();
-    if (!engine) { 
-      console.warn('⚠️ ML Engine not available for data collection');
-      return; 
+  // FIXED: Enhanced data validation and schema consistency
+  validateDeviceData(appliances) {
+    if (!Array.isArray(appliances)) {
+      throw new Error('Appliances must be an array');
     }
-    
+
+    const requiredFields = ['id', 'name', 'type', 'status'];
+    for (const appliance of appliances) {
+      for (const field of requiredFields) {
+        if (!appliance.hasOwnProperty(field)) {
+          throw new Error(`Missing required field '${field}' in appliance: ${JSON.stringify(appliance)}`);
+        }
+      }
+      
+      if (!['on', 'off'].includes(appliance.status)) {
+        throw new Error(`Invalid status '${appliance.status}' for device ${appliance.id}`);
+      }
+    }
+
+    return true;
+  }
+
+  // FIXED: Coordinated data collection with locks and validation
+  async collectData(appliances) {
+    if (this.operationLocks.dataCollection) {
+      console.warn('⚠️ Data collection already in progress, skipping');
+      return { success: false, error: 'Collection in progress' };
+    }
+
     try {
+      await this.acquireLock('dataCollection');
+      
+      const engine = this.getCurrentEngine();
+      if (!engine) { 
+        throw new Error('ML Engine not available for data collection');
+      }
+      
+      this.validateDeviceData(appliances);
       const deviceList = Array.isArray(appliances) ? appliances : [];
       
-      // Always collect as day pattern - this fixes the main issue
+      // Always collect as day pattern for consistency
       await engine.collectDayPattern(deviceList);
       
       const min = this.simulationEnabled ? 
-        Math.max(3, engine.config.minDataPoints * 0.5) : // 3-4 days minimum
+        Math.max(3, engine.config.minDataPoints * 0.5) : 
         engine.config.minDataPoints;
         
       if (this.config.autoTrainEnabled && 
           engine.trainingData.dayPatterns.length >= min && 
-          engine.shouldRetrain()) {
+          engine.shouldRetrain() &&
+          !this.operationLocks.training) {
         console.log('🔄 Auto-retraining triggered');
-        await this.trainModels();
+        // Don't await to prevent blocking
+        this.trainModels().catch(error => 
+          this.logError('autoTrain', error)
+        );
       }
+
+      return { success: true, collected: true };
     } catch (error) { 
-      console.error('Error collecting data:', error); 
+      this.logError('collectData', error, { applianceCount: appliances?.length });
+      return { success: false, error: error.message };
+    } finally {
+      this.releaseLock('dataCollection');
     }
   }
 
-  // FIXED: Fast-forward creates dayPatterns correctly
+  // FIXED: Enhanced simulation with proper progress tracking and validation
   async fastForwardSimulation(days = 7, onProgress = null) {
-    if (!this.simulationEnabled) return { success: false, error: 'Simulation not enabled' };
-    if (!this.hasCurrentUser()) return { success: false, error: 'No user selected for simulation' };
+    if (!this.simulationEnabled) {
+      return { success: false, error: 'Simulation not enabled' };
+    }
+    if (!this.hasCurrentUser()) {
+      return { success: false, error: 'No user selected for simulation' };
+    }
     
-    console.log(`⏩ ML Fast-forwarding ${days} days with full day patterns...`);
-    
-    let daysGenerated = 0;
-    
-    for (let day = 0; day < days; day++) {
-      const dayPattern = this.generateFullDayPattern(day);
+    try {
+      await this.acquireLock('simulation');
       
-      // CRITICAL FIX: Use injectDayPattern instead of injectSimulationData
-      await this.injectDayPattern(dayPattern);
+      console.log(`⏩ ML Fast-forwarding ${days} days with full day patterns...`);
+      this.isSimulating = true;
       
-      daysGenerated++;
+      const generatedPatterns = [];
+      let daysGenerated = 0;
       
-      if (onProgress) {
-        onProgress({
-          day: day + 1,
-          totalDays: days,
-          dayPatterns: daysGenerated, // Show day patterns, not samples
-          progress: Math.round(((day + 1) / days) * 100)
+      for (let day = 0; day < days; day++) {
+        try {
+          const dayPattern = this.generateFullDayPattern(day);
+          
+          // Validate pattern before injection
+          if (!this.validateDayPattern(dayPattern)) {
+            throw new Error(`Invalid day pattern generated for day ${day}`);
+          }
+          
+          await this.injectDayPattern(dayPattern);
+          generatedPatterns.push(dayPattern);
+          daysGenerated++;
+          
+          if (onProgress) {
+            const progressData = {
+              day: day + 1,
+              totalDays: days,
+              dayPatterns: daysGenerated,
+              progress: Math.round(((day + 1) / days) * 100),
+              currentDate: dayPattern.date,
+              totalEnergy: dayPattern.summary.totalEnergyKwh
+            };
+            
+            try {
+              onProgress(progressData);
+            } catch (progressError) {
+              console.warn('Progress callback error:', progressError);
+            }
+          }
+          
+          // Prevent blocking with small delays
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } catch (dayError) {
+          this.logError('simulationDay', dayError, { day });
+          // Continue with next day instead of failing completely
+          continue;
+        }
+      }
+      
+      // Auto-train if sufficient data
+      if (this.currentEngine.trainingData.dayPatterns.length >= this.currentEngine.config.minDataPoints) {
+        console.log('🎓 Auto-training with day patterns...');
+        try {
+          await this.trainModels();
+        } catch (trainError) {
+          this.logError('simulationTraining', trainError);
+          // Don't fail the simulation if training fails
+        }
+      }
+      
+      return { 
+        success: true, 
+        dayPatternsGenerated: daysGenerated,
+        simulatedDays: days, 
+        status: this.getSimulationStatus(),
+        generatedPatterns: generatedPatterns.length
+      };
+    } catch (error) {
+      this.logError('fastForwardSimulation', error, { days });
+      return { success: false, error: error.message };
+    } finally {
+      this.isSimulating = false;
+      this.releaseLock('simulation');
+    }
+  }
+
+  // FIXED: Enhanced day pattern validation
+  validateDayPattern(dayPattern) {
+    if (!dayPattern || typeof dayPattern !== 'object') {
+      return false;
+    }
+
+    const requiredFields = ['date', 'dayOfWeek', 'hourlySnapshots', 'summary'];
+    for (const field of requiredFields) {
+      if (!dayPattern.hasOwnProperty(field)) {
+        console.error(`Missing required field in day pattern: ${field}`);
+        return false;
+      }
+    }
+
+    if (!Array.isArray(dayPattern.hourlySnapshots) || dayPattern.hourlySnapshots.length !== 24) {
+      console.error('Day pattern must have exactly 24 hourly snapshots');
+      return false;
+    }
+
+    // Validate each hourly snapshot
+    for (let i = 0; i < dayPattern.hourlySnapshots.length; i++) {
+      const snapshot = dayPattern.hourlySnapshots[i];
+      if (!snapshot.timestamp || !Array.isArray(snapshot.devices) || typeof snapshot.hour !== 'number') {
+        console.error(`Invalid hourly snapshot at index ${i}`);
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  // Existing pattern generation methods remain the same but with enhanced error handling
+  generateFullDayPattern(dayOffset = 0) {
+    try {
+      const currentDate = new Date();
+      currentDate.setDate(currentDate.getDate() - dayOffset);
+      
+      const isWeekend = currentDate.getDay() === 0 || currentDate.getDay() === 6;
+      const dayType = isWeekend ? 'weekend' : 'weekday';
+      
+      const hourlySnapshots = [];
+      const dayEvents = this.generateDayEvents(isWeekend);
+      
+      for (let hour = 0; hour < 24; hour++) {
+        const timestamp = new Date(currentDate);
+        timestamp.setHours(hour, Math.floor(Math.random() * 60), Math.floor(Math.random() * 60));
+        
+        const devices = this.currentAppliances.map(appliance => {
+          const devicePattern = this.getRealisticDeviceState(
+            appliance, 
+            hour, 
+            isWeekend, 
+            dayEvents,
+            hourlySnapshots[hour - 1]
+          );
+          
+          return {
+            id: appliance.id,
+            type: appliance.type,
+            room: appliance.room,
+            status: devicePattern.isActive ? 'on' : 'off',
+            power: devicePattern.power,
+            isActive: devicePattern.isActive,
+            transitionReason: devicePattern.reason,
+            context: devicePattern.context,
+          };
+        });
+
+        const totalPower = devices
+          .filter(device => device.isActive)
+          .reduce((sum, device) => sum + device.power, 0);
+
+        hourlySnapshots.push({
+          timestamp: timestamp.toISOString(),
+          hour,
+          dayOfWeek: currentDate.getDay(),
+          isWeekend,
+          devices,
+          totalPower,
+          activeDeviceCount: devices.filter(d => d.isActive).length,
+          dayEvents: dayEvents.filter(event => event.hour === hour),
         });
       }
-      
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    if (this.currentEngine.trainingData.dayPatterns.length >= this.currentEngine.config.minDataPoints) {
-      console.log('🎓 Auto-training with day patterns...');
-      await this.trainModels();
-    }
-    
-    return { 
-      success: true, 
-      dayPatternsGenerated: daysGenerated, // FIXED: Return day patterns count
-      simulatedDays: days, 
-      status: this.getSimulationStatus() 
-    };
-  }
 
-  generateFullDayPattern(dayOffset = 0) {
-    const currentDate = new Date();
-    currentDate.setDate(currentDate.getDate() - dayOffset);
-    
-    const isWeekend = currentDate.getDay() === 0 || currentDate.getDay() === 6;
-    const dayType = isWeekend ? 'weekend' : 'weekday';
-    
-    const hourlySnapshots = []; // FIXED: Use correct property name
-    const dayEvents = this.generateDayEvents(isWeekend);
-    
-    for (let hour = 0; hour < 24; hour++) {
-      const timestamp = new Date(currentDate);
-      timestamp.setHours(hour, Math.floor(Math.random() * 60), Math.floor(Math.random() * 60));
-      
-      const devices = this.currentAppliances.map(appliance => {
-        const devicePattern = this.getRealisticDeviceState(
-          appliance, 
-          hour, 
-          isWeekend, 
-          dayEvents,
-          hourlySnapshots[hour - 1] // Previous hour for context
-        );
-        
-        return {
-          id: appliance.id,
-          type: appliance.type,
-          room: appliance.room,
-          status: devicePattern.isActive ? 'on' : 'off',
-          power: devicePattern.power,
-          isActive: devicePattern.isActive,
-          transitionReason: devicePattern.reason,
-          context: devicePattern.context,
-        };
-      });
-
-      const totalPower = devices
-        .filter(device => device.isActive)
-        .reduce((sum, device) => sum + device.power, 0);
-
-      hourlySnapshots.push({
-        timestamp: timestamp.toISOString(),
-        hour,
+      return {
+        date: currentDate.toISOString().split('T')[0],
         dayOfWeek: currentDate.getDay(),
         isWeekend,
-        devices,
-        totalPower,
-        activeDeviceCount: devices.filter(d => d.isActive).length,
-        dayEvents: dayEvents.filter(event => event.hour === hour),
-      });
+        dayType,
+        collectedAt: new Date().toISOString(),
+        realData: false,
+        hourlySnapshots,
+        summary: {
+          totalEnergyKwh: hourlySnapshots.reduce((sum, hour) => sum + hour.totalPower, 0) / 1000,
+          peakHour: hourlySnapshots.reduce((max, hour, index) => 
+            hour.totalPower > hourlySnapshots[max]?.totalPower ? index : max, 0),
+          averagePower: hourlySnapshots.reduce((sum, hour) => sum + hour.totalPower, 0) / 24,
+          activeDeviceHours: hourlySnapshots.reduce((sum, hour) => sum + hour.activeDeviceCount, 0),
+        },
+        dayEvents
+      };
+    } catch (error) {
+      this.logError('generateFullDayPattern', error, { dayOffset });
+      throw error;
     }
-
-    // FIXED: Return correct day pattern structure
-    return {
-      date: currentDate.toISOString().split('T')[0],
-      dayOfWeek: currentDate.getDay(),
-      isWeekend,
-      dayType,
-      collectedAt: new Date().toISOString(),
-      realData: false, // This is simulated
-      hourlySnapshots, // FIXED: Use correct property name
-      summary: {
-        totalEnergyKwh: hourlySnapshots.reduce((sum, hour) => sum + hour.totalPower, 0) / 1000,
-        peakHour: hourlySnapshots.reduce((max, hour, index) => 
-          hour.totalPower > hourlySnapshots[max]?.totalPower ? index : max, 0),
-        averagePower: hourlySnapshots.reduce((sum, hour) => sum + hour.totalPower, 0) / 24,
-        activeDeviceHours: hourlySnapshots.reduce((sum, hour) => sum + hour.activeDeviceCount, 0),
-      },
-      dayEvents
-    };
   }
 
+  // [All the existing generation methods remain the same...]
   generateDayEvents(isWeekend) {
     const events = [];
     
@@ -356,60 +540,17 @@ class MLService {
 
   getDeviceHourlyProbability(deviceType, hour, isWeekend) {
     const patterns = {
-      refrigerator: {
-        probability: 1.0,
-        reason: 'Essential appliance - always running'
-      },
-      
-      router: {
-        probability: 1.0,
-        reason: 'Network essential - always running'
-      },
-      
-      light: {
-        probability: this.getLightProbability(hour, isWeekend),
-        reason: this.getLightReason(hour, isWeekend)
-      },
-      
-      tv: {
-        probability: this.getTVProbability(hour, isWeekend),
-        reason: this.getTVReason(hour, isWeekend)
-      },
-      
-      computer: {
-        probability: this.getComputerProbability(hour, isWeekend),
-        reason: this.getComputerReason(hour, isWeekend)
-      },
-      
-      'air conditioner': {
-        probability: this.getACProbability(hour, isWeekend),
-        reason: this.getACReason(hour, isWeekend)
-      },
-      
-      heater: {
-        probability: this.getHeaterProbability(hour, isWeekend),
-        reason: this.getHeaterReason(hour, isWeekend)
-      },
-      
-      microwave: {
-        probability: this.getMicrowaveProbability(hour, isWeekend),
-        reason: this.getMicrowaveReason(hour, isWeekend)
-      },
-      
-      kettle: {
-        probability: this.getKettleProbability(hour, isWeekend),
-        reason: this.getKettleReason(hour, isWeekend)
-      },
-      
-      'washing machine': {
-        probability: this.getWashingMachineProbability(hour, isWeekend),
-        reason: this.getWashingMachineReason(hour, isWeekend)
-      },
-      
-      default: {
-        probability: this.getDefaultProbability(hour, isWeekend),
-        reason: 'General usage pattern'
-      }
+      refrigerator: { probability: 1.0, reason: 'Essential appliance - always running' },
+      router: { probability: 1.0, reason: 'Network essential - always running' },
+      light: { probability: this.getLightProbability(hour, isWeekend), reason: this.getLightReason(hour, isWeekend) },
+      tv: { probability: this.getTVProbability(hour, isWeekend), reason: this.getTVReason(hour, isWeekend) },
+      computer: { probability: this.getComputerProbability(hour, isWeekend), reason: this.getComputerReason(hour, isWeekend) },
+      'air conditioner': { probability: this.getACProbability(hour, isWeekend), reason: this.getACReason(hour, isWeekend) },
+      heater: { probability: this.getHeaterProbability(hour, isWeekend), reason: this.getHeaterReason(hour, isWeekend) },
+      microwave: { probability: this.getMicrowaveProbability(hour, isWeekend), reason: this.getMicrowaveReason(hour, isWeekend) },
+      kettle: { probability: this.getKettleProbability(hour, isWeekend), reason: this.getKettleReason(hour, isWeekend) },
+      'washing machine': { probability: this.getWashingMachineProbability(hour, isWeekend), reason: this.getWashingMachineReason(hour, isWeekend) },
+      default: { probability: this.getDefaultProbability(hour, isWeekend), reason: 'General usage pattern' }
     };
     
     return patterns[deviceType.toLowerCase()] || patterns.default;
@@ -528,117 +669,201 @@ class MLService {
     return 0.1;
   }
 
-  // CRITICAL FIX: Inject day patterns correctly without duplication
+  // FIXED: Enhanced pattern injection with validation and memory management
   async injectDayPattern(dayPattern) {
-    const engine = this.getCurrentEngine();
-    if (!engine || !dayPattern) return;
-    
     try {
-      // FIXED: Only store in dayPatterns, no duplication
+      const engine = this.getCurrentEngine();
+      if (!engine || !dayPattern) {
+        throw new Error('Engine or day pattern not available');
+      }
+      
+      // Validate pattern before injection
+      if (!this.validateDayPattern(dayPattern)) {
+        throw new Error('Invalid day pattern structure');
+      }
+      
       if (!engine.trainingData.dayPatterns) {
         engine.trainingData.dayPatterns = [];
       }
       
       engine.trainingData.dayPatterns.push(dayPattern);
       
-      // Keep data manageable
-      if (engine.trainingData.dayPatterns.length > 100) {
-        engine.trainingData.dayPatterns = engine.trainingData.dayPatterns.slice(-50);
+      // FIXED: Memory management - archive old data if needed
+      if (engine.trainingData.dayPatterns.length > this.config.maxTrainingDataSize) {
+        await this.archiveOldData(engine);
       }
       
       console.log(`📥 Injected day pattern for ${dayPattern.date} (${dayPattern.hourlySnapshots.length} hours)`);
       
       await engine.saveTrainingData();
       console.log(`📊 Total day patterns: ${engine.trainingData.dayPatterns.length}`);
+      
+      return { success: true, totalPatterns: engine.trainingData.dayPatterns.length };
     } catch (error) {
-      console.error('Error injecting day pattern:', error);
+      this.logError('injectDayPattern', error, { date: dayPattern?.date });
+      throw error;
     }
   }
 
-  // FIXED: Get training progress based on days correctly
+  // FIXED: Data archiving for memory management
+  async archiveOldData(engine) {
+    try {
+      const threshold = this.config.dataArchiveThreshold;
+      const patterns = engine.trainingData.dayPatterns;
+      
+      if (patterns.length > threshold) {
+        // Keep most recent data, archive older
+        const toKeep = patterns.slice(-threshold);
+        const toArchive = patterns.slice(0, patterns.length - threshold);
+        
+        // Store archived data
+        const archiveKey = `${engine.storageKey}_archive_${Date.now()}`;
+        await AsyncStorage.setItem(archiveKey, JSON.stringify({
+          archived: true,
+          timestamp: new Date().toISOString(),
+          data: toArchive,
+          userId: this.currentUserId
+        }));
+        
+        engine.trainingData.dayPatterns = toKeep;
+        console.log(`📦 Archived ${toArchive.length} old day patterns, kept ${toKeep.length} recent ones`);
+      }
+    } catch (error) {
+      this.logError('archiveOldData', error);
+      // Don't throw - archiving failure shouldn't break the main operation
+    }
+  }
+
+  // FIXED: Enhanced training progress with validation
   getTrainingProgress() {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      console.warn('⚠️ No ML engine available for training progress');
-      return { 
-        progress: 0, 
-        status: 'not_initialized', 
+    try {
+      const engine = this.getCurrentEngine();
+      if (!engine) {
+        return { 
+          progress: 0, 
+          status: 'not_initialized', 
+          current: 0,
+          required: 7,
+          canTrain: false,
+          userId: this.currentUserId,
+          simulation: { enabled: this.simulationEnabled },
+          error: 'No ML engine available'
+        };
+      }
+      
+      const currentDays = engine.trainingData.dayPatterns?.length || 0;
+      const requiredDays = this.simulationEnabled ? 5 : 10;
+        
+      const progress = Math.min(100, (currentDays / requiredDays) * 100);
+      
+      return {
+        progress: Math.round(progress),
+        current: currentDays,
+        required: requiredDays,
+        status: progress >= 100 ? 'ready' : 'collecting',
+        canTrain: currentDays >= requiredDays && !this.operationLocks.training,
+        userId: this.currentUserId,
+        samplingMode: 'daily',
+        dataSize: this.getDataSize(),
+        simulation: {
+          enabled: this.simulationEnabled,
+          isSimulating: this.isSimulating,
+          simulatedDays: currentDays,
+          totalSamples: engine.trainingData.deviceUsage?.length || 0,
+        },
+        locks: { ...this.operationLocks }
+      };
+    } catch (error) {
+      this.logError('getTrainingProgress', error);
+      return {
+        progress: 0,
+        status: 'error',
         current: 0,
         required: 7,
         canTrain: false,
-        userId: this.currentUserId,
-        simulation: { enabled: this.simulationEnabled }
+        error: error.message
       };
     }
-    
-    // FIXED: Use ONLY dayPatterns for counting, no fallback math
-    const currentDays = engine.trainingData.dayPatterns?.length || 0;
-    const requiredDays = this.simulationEnabled ? 5 : 10;
-      
-    const progress = Math.min(100, (currentDays / requiredDays) * 100);
-    
-    return {
-      progress: Math.round(progress),
-      current: currentDays,
-      required: requiredDays,
-      status: progress >= 100 ? 'ready' : 'collecting',
-      canTrain: currentDays >= requiredDays,
-      userId: this.currentUserId,
-      samplingMode: 'daily',
-      simulation: {
-        enabled: this.simulationEnabled,
-        isSimulating: this.isSimulating,
-        simulatedDays: currentDays,
-        totalSamples: engine.trainingData.deviceUsage.length,
-      },
-    };
   }
 
-  // FIXED: injectSimulationData now creates day patterns
-  async injectSimulationData(simulationData) {
-    const engine = this.getCurrentEngine();
-    if (!engine || !simulationData) return;
-    
+  // FIXED: Memory usage tracking
+  getDataSize() {
     try {
+      const engine = this.getCurrentEngine();
+      if (!engine) return 0;
+      
+      const dataString = JSON.stringify(engine.trainingData);
+      return dataString.length * 2; // Approximate bytes (UTF-16)
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  // FIXED: Enhanced simulation data injection with validation
+  async injectSimulationData(simulationData) {
+    try {
+      await this.acquireLock('simulation', 10000);
+      
+      const engine = this.getCurrentEngine();
+      if (!engine || !simulationData) {
+        throw new Error('Engine or simulation data not available');
+      }
+      
       const { deviceUsage, userActions, plannedData } = simulationData;
       
       if (deviceUsage?.length) {
-        // CRITICAL FIX: Group hourly samples into day patterns
         const dayGroups = this.groupSamplesByDay(deviceUsage);
+        let patternsCreated = 0;
         
         for (const [date, hourlySamples] of dayGroups) {
-          if (hourlySamples.length === 24) { // Only complete days
+          if (hourlySamples.length === 24) {
             const dayPattern = this.createDayPatternFromSamples(hourlySamples, date);
             
-            // Store in dayPatterns array (not deviceUsage)
-            if (!engine.trainingData.dayPatterns) {
-              engine.trainingData.dayPatterns = [];
+            if (this.validateDayPattern(dayPattern)) {
+              if (!engine.trainingData.dayPatterns) {
+                engine.trainingData.dayPatterns = [];
+              }
+              engine.trainingData.dayPatterns.push(dayPattern);
+              patternsCreated++;
             }
-            engine.trainingData.dayPatterns.push(dayPattern);
           }
         }
         
-        console.log(`📥 Created ${dayGroups.size} day patterns from simulation data`);
+        console.log(`📥 Created ${patternsCreated} day patterns from simulation data`);
       }
       
       if (userActions?.length) {
+        if (!engine.trainingData.userActions) {
+          engine.trainingData.userActions = [];
+        }
         engine.trainingData.userActions.push(...userActions);
         console.log(`📥 Injected ${userActions.length} user actions`);
       }
       
       await engine.saveTrainingData();
       console.log(`📊 Total day patterns: ${engine.trainingData.dayPatterns?.length || 0}`);
-    } catch (error) { 
-      console.error('Error injecting simulation data:', error); 
+      
+      return { 
+        success: true, 
+        patternsCreated: dayGroups?.size || 0,
+        actionsAdded: userActions?.length || 0
+      };
+    } catch (error) {
+      this.logError('injectSimulationData', error, { 
+        deviceUsageCount: simulationData?.deviceUsage?.length,
+        userActionsCount: simulationData?.userActions?.length
+      });
+      return { success: false, error: error.message };
+    } finally {
+      this.releaseLock('simulation');
     }
   }
 
-  // NEW: Group hourly samples into days
   groupSamplesByDay(samples) {
     const dayGroups = new Map();
     
     samples.forEach(sample => {
-      const date = sample.timestamp.split('T')[0]; // Get YYYY-MM-DD
+      const date = sample.timestamp.split('T')[0];
       if (!dayGroups.has(date)) {
         dayGroups.set(date, []);
       }
@@ -648,17 +873,15 @@ class MLService {
     return dayGroups;
   }
 
-  // NEW: Create day pattern from hourly samples
   createDayPatternFromSamples(hourlySamples, date) {
-    // Sort by hour to ensure correct order
     const sortedSamples = hourlySamples.sort((a, b) => a.hour - b.hour);
     
-    const dayPattern = {
+    return {
       date: date,
       dayOfWeek: new Date(date).getDay(),
       isWeekend: [0, 6].includes(new Date(date).getDay()),
       collectedAt: new Date().toISOString(),
-      realData: false, // This is simulated
+      realData: false,
       hourlySnapshots: sortedSamples,
       summary: {
         totalEnergyKwh: sortedSamples.reduce((sum, hour) => sum + hour.totalPower, 0) / 1000,
@@ -668,95 +891,127 @@ class MLService {
         activeDeviceHours: sortedSamples.reduce((sum, hour) => sum + hour.activeDeviceCount, 0),
       }
     };
-    
-    return dayPattern;
   }
 
-  // Rest of existing methods remain the same...
+  // FIXED: Enhanced initialization with proper error handling
   async initialize(userId = null, supabase = null) {
-    if (userId) {
-      this.setCurrentUser(userId, supabase);
-    }
-    
-    if (!this.currentEngine) {
-      console.warn('⚠️ ML Engine not initialized: No user selected');
-      return { success: false, error: 'No user selected for ML engine' };
-    }
-
-    if (this.initialized) {
-      console.log('✅ ML Service already initialized');
-      return { success: true };
-    }
-
     try {
+      await this.acquireLock('initialization');
+      
+      if (userId) {
+        const userResult = await this.setCurrentUser(userId, supabase);
+        if (!userResult.success) {
+          throw new Error(userResult.error);
+        }
+      }
+      
+      if (!this.currentEngine) {
+        throw new Error('No user selected for ML engine');
+      }
+
+      if (this.initialized) {
+        console.log('✅ ML Service already initialized');
+        return { success: true, existing: true };
+      }
+
       console.log(`🚀 Starting ML Service for user: ${this.currentUserId}...`);
 
       const result = await this.currentEngine.initialize();
       if (result.success) {
         this.initialized = true;
-        if (this.config.enableBackgroundCollection) this.startBackgroundCollection();
+        if (this.config.enableBackgroundCollection) {
+          this.startBackgroundCollection();
+        }
         console.log('✅ ML Service ready with user-specific engine');
-        return { success: true };
+        return { success: true, existing: false };
       }
-      return result;
+      
+      throw new Error(result.error || 'ML Engine initialization failed');
     } catch (error) {
-      console.error('❌ ML Service initialization failed:', error);
+      this.logError('initialize', error, { userId });
       return { success: false, error: error.message };
+    } finally {
+      this.releaseLock('initialization');
     }
   }
 
+  // FIXED: Enhanced model training with locks and validation
   async trainModels() {
-    const engine = this.getCurrentEngine();
-    if (!engine) return { success: false, error: 'ML Engine not available' };
-    
+    if (this.operationLocks.training) {
+      return { success: false, error: 'Training already in progress' };
+    }
+
     try {
+      await this.acquireLock('training');
+      
+      const engine = this.getCurrentEngine();
+      if (!engine) {
+        throw new Error('ML Engine not available');
+      }
+      
+      // Validate training data
+      const dayPatterns = engine.trainingData.dayPatterns || [];
+      if (dayPatterns.length < engine.config.minDataPoints) {
+        throw new Error(`Insufficient data: ${dayPatterns.length}/${engine.config.minDataPoints} day patterns`);
+      }
+      
       console.log('🎓 Starting ML model training with day patterns...');
+      const startTime = Date.now();
+      
       const result = await engine.trainModels();
+      const trainingTime = Date.now() - startTime;
+      
       if (result.success) {
-        console.log('✅ ML models trained successfully');
+        console.log(`✅ ML models trained successfully in ${trainingTime}ms`);
         await engine.saveModels();
         return { 
           success: true, 
           accuracy: result.accuracy, 
           modelInfo: result,
-          trainingTime: result.trainingTime || 0
+          trainingTime,
+          dataPoints: dayPatterns.length
         };
       }
-      console.error('❌ ML model training failed:', result.error);
-      return result;
+      
+      throw new Error(result.error || 'Training failed');
     } catch (error) {
-      console.error('Error training models:', error);
+      this.logError('trainModels', error);
       return { success: false, error: error.message };
+    } finally {
+      this.releaseLock('training');
     }
   }
 
+  // FIXED: Enhanced predictions with error handling
   async getPredictions(appliances, horizon = 24) {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      console.warn('⚠️ No ML engine available for predictions');
-      return { 
-        success: false, 
-        error: 'ML Engine not available',
-        predictions: [],
-        confidence: 0,
-        horizon 
-      };
-    }
-    
     try {
+      const engine = this.getCurrentEngine();
+      if (!engine) {
+        return { 
+          success: false, 
+          error: 'ML Engine not available',
+          predictions: [],
+          confidence: 0,
+          horizon 
+        };
+      }
+      
+      this.validateDeviceData(appliances);
       const deviceList = Array.isArray(appliances) ? appliances : [];
+      
       const predictions = engine.getPredictions(deviceList);
       const confidence = engine.getPredictionConfidence ? 
         engine.getPredictionConfidence() : 0;
       
       return { 
         success: true, 
-        predictions, 
+        predictions: predictions || [], 
         confidence, 
-        horizon 
+        horizon,
+        timestamp: new Date().toISOString()
       };
     } catch (error) {
-      console.error('Error getting predictions:', error);
+      this.logError('getPredictions', error, { applianceCount: appliances?.length, horizon });
       return { 
         success: false, 
         error: error.message,
@@ -767,55 +1022,81 @@ class MLService {
     }
   }
 
-  // Add missing getAllPredictions method
   async getAllPredictions(appliances, horizon = 24) {
     return await this.getPredictions(appliances, horizon);
   }
 
+  // FIXED: Enhanced recommendations with error handling
   getRecommendations(appliances) {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      console.warn('⚠️ No ML engine available for recommendations');
+    try {
+      const engine = this.getCurrentEngine();
+      if (!engine) {
+        return [];
+      }
+      
+      this.validateDeviceData(appliances);
+      const deviceList = Array.isArray(appliances) ? appliances : [];
+      return engine.getRecommendations(deviceList) || [];
+    } catch (error) {
+      this.logError('getRecommendations', error, { applianceCount: appliances?.length });
       return [];
     }
-    const deviceList = Array.isArray(appliances) ? appliances : [];
-    return engine.getRecommendations(deviceList);
   }
 
+  // FIXED: Enhanced anomaly detection with error handling
   detectAnomalies(appliances) {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      console.warn('⚠️ No ML engine available for anomaly detection');
+    try {
+      const engine = this.getCurrentEngine();
+      if (!engine) {
+        return { hasAnomaly: false, anomalies: [] };
+      }
+      
+      this.validateDeviceData(appliances);
+      const deviceList = Array.isArray(appliances) ? appliances : [];
+      return engine.detectAnomalies(deviceList) || { hasAnomaly: false, anomalies: [] };
+    } catch (error) {
+      this.logError('detectAnomalies', error, { applianceCount: appliances?.length });
       return { hasAnomaly: false, anomalies: [] };
     }
-    const deviceList = Array.isArray(appliances) ? appliances : [];
-    return engine.detectAnomalies(deviceList);
   }
 
+  // FIXED: Enhanced insights with comprehensive error handling
   getMLInsights(appliances) {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      console.warn('⚠️ No ML engine available for insights');
-      return { 
-        ready: false, 
-        message: 'ML Service not available', 
-        dataProgress: 0, 
-        simulation: this.getSimulationStatus(),
-        userId: this.currentUserId,
-        predictions: [],
-        recommendations: [],
-        anomalies: { hasAnomaly: false, anomalies: [] },
-        dayPatterns: 0, // FIXED: Add dayPatterns count
-        dataSamples: 0,
-      };
-    }
-    
     try {
-      const deviceList = Array.isArray(appliances) ? appliances : (Array.isArray(this.currentAppliances) ? this.currentAppliances : []);
+      const engine = this.getCurrentEngine();
+      if (!engine) {
+        return { 
+          ready: false, 
+          message: 'ML Service not available', 
+          dataProgress: 0, 
+          simulation: this.getSimulationStatus(),
+          userId: this.currentUserId,
+          predictions: [],
+          recommendations: [],
+          anomalies: { hasAnomaly: false, anomalies: [] },
+          dayPatterns: 0,
+          dataSamples: 0,
+          error: 'No ML engine available'
+        };
+      }
+      
+      const deviceList = Array.isArray(appliances) ? appliances : 
+                        (Array.isArray(this.currentAppliances) ? this.currentAppliances : []);
+      
+      if (deviceList.length > 0) {
+        this.validateDeviceData(deviceList);
+      }
+      
       const insights = engine.getMLInsights(deviceList);
-      return { ...insights, simulation: this.getSimulationStatus() };
+      return { 
+        ...insights, 
+        simulation: this.getSimulationStatus(),
+        dataSize: this.getDataSize(),
+        memoryUsage: this.getMemoryUsage(),
+        lastError: this.errorHistory[0] || null
+      };
     } catch (error) {
-      console.error('Error getting insights:', error);
+      this.logError('getMLInsights', error, { applianceCount: appliances?.length });
       return { 
         ready: false, 
         error: error.message, 
@@ -830,22 +1111,50 @@ class MLService {
     }
   }
 
+  getMemoryUsage() {
+    try {
+      const dataSize = this.getDataSize();
+      const usagePercent = (dataSize / this.config.maxMemoryUsage) * 100;
+      return {
+        current: dataSize,
+        max: this.config.maxMemoryUsage,
+        percent: Math.min(100, usagePercent),
+        status: usagePercent > 90 ? 'critical' : usagePercent > 70 ? 'warning' : 'ok'
+      };
+    } catch (error) {
+      return { current: 0, max: this.config.maxMemoryUsage, percent: 0, status: 'ok' };
+    }
+  }
+
   getEnergyForecast(appliances, hours = 12) {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
+    try {
+      const engine = this.getCurrentEngine();
+      if (!engine) {
+        return { 
+          success: false, 
+          forecast: [], 
+          totalExpectedEnergy: 0, 
+          totalExpectedCost: 0,
+          error: 'ML Engine not available'
+        };
+      }
+
+      this.validateDeviceData(appliances);
+      return engine.getEnergyForecast(appliances, hours);
+    } catch (error) {
+      this.logError('getEnergyForecast', error, { applianceCount: appliances?.length, hours });
       return { 
         success: false, 
         forecast: [], 
         totalExpectedEnergy: 0, 
-        totalExpectedCost: 0 
+        totalExpectedCost: 0,
+        error: error.message
       };
     }
-
-    return engine.getEnergyForecast(appliances, hours);
   }
 
   isReadyForUser(userId) {
-    return this.currentUserId === userId && this.initialized && this.currentEngine;
+    return this.currentUserId === userId && this.initialized && this.currentEngine && !this.operationLocks.cleanup;
   }
 
   getCurrentUserId() {
@@ -857,148 +1166,277 @@ class MLService {
   }
 
   initializeSimulation(appliances) {
-    if (!this.simulationEnabled) return { success: false, error: 'Simulation not enabled' };
-    
-    const engine = this.getCurrentEngine();
-    if (!engine) return { success: false, error: 'ML Engine not available' };
-    
-    this.currentAppliances = Array.isArray(appliances) ? appliances : [];
-    console.log('🎮 Day-based simulation initialized for ML training');
-    return { 
-      success: true, 
-      simulatedAppliances: this.currentAppliances, 
-      status: { enabled: true, isSimulating: false } 
-    };
+    try {
+      if (!this.simulationEnabled) {
+        return { success: false, error: 'Simulation not enabled' };
+      }
+      
+      const engine = this.getCurrentEngine();
+      if (!engine) {
+        return { success: false, error: 'ML Engine not available' };
+      }
+      
+      this.validateDeviceData(appliances);
+      this.currentAppliances = Array.isArray(appliances) ? appliances : [];
+      
+      console.log('🎮 Day-based simulation initialized for ML training');
+      return { 
+        success: true, 
+        simulatedAppliances: this.currentAppliances, 
+        status: { enabled: true, isSimulating: false } 
+      };
+    } catch (error) {
+      this.logError('initializeSimulation', error, { applianceCount: appliances?.length });
+      return { success: false, error: error.message };
+    }
   }
 
   getSimulationStatus() {
-    const engine = this.getCurrentEngine();
-    const days = engine?.trainingData?.dayPatterns?.length || 0;
-    const samples = engine?.trainingData?.deviceUsage?.length || 0;
-    
-    return { 
-      enabled: this.simulationEnabled, 
-      isSimulating: this.isSimulating,
-      simulatedDays: days,
-      simulatedSamples: samples,
-      samplingMode: 'daily',
-      userId: this.currentUserId
-    };
+    try {
+      const engine = this.getCurrentEngine();
+      const days = engine?.trainingData?.dayPatterns?.length || 0;
+      const samples = engine?.trainingData?.deviceUsage?.length || 0;
+      
+      return { 
+        enabled: this.simulationEnabled, 
+        isSimulating: this.isSimulating,
+        simulatedDays: days,
+        simulatedSamples: samples,
+        samplingMode: 'daily',
+        userId: this.currentUserId,
+        memoryUsage: this.getMemoryUsage(),
+        locks: { ...this.operationLocks }
+      };
+    } catch (error) {
+      return {
+        enabled: this.simulationEnabled,
+        isSimulating: false,
+        simulatedDays: 0,
+        simulatedSamples: 0,
+        error: error.message
+      };
+    }
   }
 
   stopSimulation() {
-    if (this.simulationInterval) {
-      clearInterval(this.simulationInterval);
-      this.simulationInterval = null;
+    try {
+      if (this.simulationInterval) {
+        clearInterval(this.simulationInterval);
+        this.simulationInterval = null;
+      }
+      this.isSimulating = false;
+      this.releaseLock('simulation');
+      return { success: true, status: this.getSimulationStatus() };
+    } catch (error) {
+      this.logError('stopSimulation', error);
+      return { success: false, error: error.message };
     }
-    this.isSimulating = false;
-    return { success: true, status: this.getSimulationStatus() };
   }
 
   resetSimulation() {
-    this.stopSimulation();
-    return { success: true, status: this.getSimulationStatus() };
+    try {
+      this.stopSimulation();
+      return { success: true, status: this.getSimulationStatus() };
+    } catch (error) {
+      this.logError('resetSimulation', error);
+      return { success: false, error: error.message };
+    }
   }
 
   setSimulationEnabled(enabled) {
-    this.simulationEnabled = enabled;
-    if (!enabled) this.stopSimulation();
-    return { success: true, simulationEnabled: this.simulationEnabled };
+    try {
+      this.simulationEnabled = enabled;
+      if (!enabled) this.stopSimulation();
+      return { success: true, simulationEnabled: this.simulationEnabled };
+    } catch (error) {
+      this.logError('setSimulationEnabled', error, { enabled });
+      return { success: false, error: error.message };
+    }
   }
 
   async forceCollection(appliances) {
-    const engine = this.getCurrentEngine();
-    if (!engine) { 
-      console.warn('⚠️ ML Engine not available for force collection');
-      return; 
-    }
     try {
+      const engine = this.getCurrentEngine();
+      if (!engine) { 
+        throw new Error('ML Engine not available for force collection');
+      }
+      
+      this.validateDeviceData(appliances);
       const deviceList = Array.isArray(appliances) ? appliances : [];
+      
       await engine.collectDayPattern(deviceList);
       console.log('📊 Force collected current day pattern');
+      return { success: true, collected: true };
     } catch (error) { 
-      console.error('Error in force collection:', error); 
+      this.logError('forceCollection', error, { applianceCount: appliances?.length });
+      return { success: false, error: error.message };
     }
   }
 
   updateAppliances(appliances) {
-    this.currentAppliances = Array.isArray(appliances) ? appliances : [];
-    if (this.simulationEnabled && this.currentAppliances.length > 0) {
-      this.initializeSimulation(this.currentAppliances);
+    try {
+      this.validateDeviceData(appliances);
+      this.currentAppliances = Array.isArray(appliances) ? appliances : [];
+      
+      if (this.simulationEnabled && this.currentAppliances.length > 0) {
+        this.initializeSimulation(this.currentAppliances);
+      }
+      
+      console.log(`📝 Updated appliances list: ${this.currentAppliances.length} devices`);
+      return { success: true, count: this.currentAppliances.length };
+    } catch (error) {
+      this.logError('updateAppliances', error, { applianceCount: appliances?.length });
+      return { success: false, error: error.message };
     }
-    console.log(`📝 Updated appliances list: ${this.currentAppliances.length} devices`);
   }
 
   startBackgroundCollection() {
-    if (this.dataCollectionInterval) return;
-    this.dataCollectionInterval = setInterval(() => {
-      if (this.currentAppliances.length > 0 && this.hasCurrentUser()) {
-        this.collectData(this.currentAppliances);
-      }
-    }, this.config.autoCollectInterval);
-    console.log(`🔄 Background day pattern collection started (${this.config.autoCollectInterval}ms interval)`);
+    try {
+      if (this.dataCollectionInterval) return { success: true, existing: true };
+      
+      this.dataCollectionInterval = setInterval(async () => {
+        if (this.currentAppliances.length > 0 && this.hasCurrentUser() && !this.operationLocks.dataCollection) {
+          try {
+            await this.collectData(this.currentAppliances);
+          } catch (error) {
+            this.logError('backgroundCollection', error);
+          }
+        }
+      }, this.config.autoCollectInterval);
+      
+      console.log(`🔄 Background day pattern collection started (${this.config.autoCollectInterval}ms interval)`);
+      return { success: true, existing: false };
+    } catch (error) {
+      this.logError('startBackgroundCollection', error);
+      return { success: false, error: error.message };
+    }
   }
 
   stopBackgroundCollection() {
-    if (this.dataCollectionInterval) {
-      clearInterval(this.dataCollectionInterval);
-      this.dataCollectionInterval = null;
-      console.log('🛑 Background data collection stopped');
+    try {
+      if (this.dataCollectionInterval) {
+        clearInterval(this.dataCollectionInterval);
+        this.dataCollectionInterval = null;
+        console.log('🛑 Background data collection stopped');
+      }
+      return { success: true };
+    } catch (error) {
+      this.logError('stopBackgroundCollection', error);
+      return { success: false, error: error.message };
     }
   }
 
-  // FIXED: Clear user data method
-  async clearUserData() {
-    const engine = this.getCurrentEngine();
-    if (!engine) {
-      return { success: false, error: 'ML Engine not available' };
-    }
-    
+  // FIXED: Enhanced cleanup with proper resource management
+  async cleanup(clearData = false) {
     try {
-      console.log('🗑️ Clearing all ML training data...');
+      await this.acquireLock('cleanup');
       
+      console.log('🧹 Starting ML Service cleanup...');
+      
+      // Stop all running operations
       this.stopBackgroundCollection();
+      this.stopSimulation();
       
-      // FIXED: Clear both dayPatterns and deviceUsage
-      engine.trainingData = {
-        deviceUsage: [],
-        userActions: [],
-        contextData: [],
-        costData: [],
-        dayPatterns: [], // Make sure this is cleared
-      };
+      // Clear operation locks
+      Object.keys(this.operationLocks).forEach(key => {
+        if (key !== 'cleanup') this.operationLocks[key] = false;
+      });
       
-      engine.models = {
-        usagePatterns: null,
-        userBehavior: null,
-        costOptimization: null,
-        anomalyDetection: null,
-        dayPatterns: null,
-      };
+      if (clearData) {
+        const engine = this.getCurrentEngine();
+        if (engine) {
+          engine.trainingData = {
+            deviceUsage: [],
+            userActions: [],
+            contextData: [],
+            costData: [],
+            dayPatterns: [],
+          };
+          
+          engine.models = {
+            usagePatterns: null,
+            userBehavior: null,
+            costOptimization: null,
+            anomalyDetection: null,
+            dayPatterns: null,
+          };
+          
+          engine.metrics = {
+            accuracy: 0,
+            lastTrainedAt: null,
+            predictionsMade: 0,
+            correctPredictions: 0,
+            userId: this.currentUserId,
+            dayPatternsTrained: 0,
+            averageDayAccuracy: 0,
+          };
+          
+          engine.initialized = false;
+          
+          // Clear storage
+          await AsyncStorage.multiRemove([engine.storageKey, engine.dataKey, engine.settingsKey]);
+        }
+      }
       
-      engine.metrics = {
-        accuracy: 0,
-        lastTrainedAt: null,
-        predictionsMade: 0,
-        correctPredictions: 0,
-        userId: this.currentUserId,
-        dayPatternsTrained: 0,
-        averageDayAccuracy: 0,
-      };
-      
-      engine.initialized = false;
+      // Reset state
+      this.currentUserId = null;
+      this.currentEngine = null;
       this.initialized = false;
+      this.currentAppliances = [];
+      this.isSimulating = false;
       
-      await AsyncStorage.multiRemove([engine.storageKey, engine.dataKey, engine.settingsKey]);
-      
-      console.log('✅ All ML data cleared successfully');
-      return { success: true, message: 'All training data cleared' };
+      console.log('✅ ML Service cleanup completed');
+      return { success: true, cleared: clearData };
     } catch (error) {
-      console.error('Error clearing data:', error);
+      this.logError('cleanup', error, { clearData });
       return { success: false, error: error.message };
+    } finally {
+      this.releaseLock('cleanup');
     }
+  }
+
+  async clearUserData() {
+    return await this.cleanup(true);
+  }
+
+  // App state change handler for proper cleanup
+  handleAppStateChange(nextAppState) {
+    if (nextAppState === 'background' || nextAppState === 'inactive') {
+      this.stopBackgroundCollection();
+    } else if (nextAppState === 'active' && this.initialized && this.config.enableBackgroundCollection) {
+      this.startBackgroundCollection();
+    }
+  }
+
+  // Get error history for debugging
+  getErrorHistory() {
+    return [...this.errorHistory];
+  }
+
+  // Health check method
+  getHealthStatus() {
+    const engine = this.getCurrentEngine();
+    const memoryUsage = this.getMemoryUsage();
+    
+    return {
+      initialized: this.initialized,
+      hasUser: this.hasCurrentUser(),
+      engineReady: !!engine,
+      dataSize: this.getDataSize(),
+      memoryUsage,
+      locks: { ...this.operationLocks },
+      errorCount: this.errorHistory.length,
+      lastError: this.errorHistory[0] || null,
+      backgroundCollection: !!this.dataCollectionInterval,
+      simulation: {
+        enabled: this.simulationEnabled,
+        running: this.isSimulating
+      }
+    };
   }
 }
 
 const mlService = new MLService();
+
+// Export singleton instance
 export default mlService;
