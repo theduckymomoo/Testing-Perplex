@@ -354,6 +354,7 @@ export const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: '#27272a',
+    position: 'relative',
   },
   deviceOffline: {
     borderColor: '#ef4444',
@@ -395,12 +396,28 @@ export const styles = StyleSheet.create({
   deviceCardRoom: {
     fontSize: 12,
     color: '#a1a1aa',
-    marginBottom: 12,
+    marginBottom: 8,
+  },
+  // NEW: Energy badge containers for grid view (FIXED)
+  deviceCardEnergyContainer: {
+    marginBottom: 8,
+  },
+  deviceCardEnergyBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  deviceCardEnergyText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ffffff',
   },
   deviceCardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginTop: 8,
   },
   statusIndicator: {
     paddingHorizontal: 10,
@@ -478,6 +495,21 @@ export const styles = StyleSheet.create({
     color: '#10b981',
     marginTop: 2,
   },
+  // NEW: Energy badge containers for list view (FIXED)
+  deviceListEnergyContainer: {
+    marginTop: 4,
+  },
+  deviceListEnergyBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  deviceListEnergyText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
   deviceListRight: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -489,6 +521,23 @@ export const styles = StyleSheet.create({
     minHeight: 44,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  // Error handling
+  errorCard: {
+    width: cardWidth,
+    backgroundColor: '#18181b',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 100,
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 14,
+    fontWeight: '600',
   },
   // Favorites
   favoritesSection: {
@@ -812,20 +861,21 @@ export const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
-  // Energy Badge
-  energyBadge: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  energyBadgeText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '700',
-  },
+  // REMOVED: Old overlapping energyBadge styles that caused the issue
+  // Energy Badge - REMOVED ABSOLUTE POSITIONING
+  // energyBadge: {
+  //   position: 'absolute',
+  //   top: 12,
+  //   left: 12,
+  //   paddingHorizontal: 8,
+  //   paddingVertical: 4,
+  //   borderRadius: 8,
+  // },
+  // energyBadgeText: {
+  //   color: '#ffffff',
+  //   fontSize: 10,
+  //   fontWeight: '700',
+  // },
   // Diagnostics
   diagnosticsRow: {
     flexDirection: 'row',

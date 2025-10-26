@@ -1,4 +1,4 @@
-// ControlsTab.js - Cleaned version without Mock API
+// ControlsTab.js - Updated version with ML Service fix and centered power usage
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -69,33 +69,49 @@ export default function ControlsTab() {
   // Get unique rooms from appliances
   const rooms = [...new Set(appliances.map(app => app.room))].sort();
 
-  // Load favorites and initialize ML service
+  // Load favorites and initialize ML service - FIXED
   useEffect(() => {
     loadFavorites();
-    initializeMLService();
-  }, []);
+    if (user?.id) {
+      initializeMLService();
+    }
+  }, [user?.id]);
 
-  // Initialize ML Service on mount
+  // Initialize ML Service on mount - FIXED VERSION
   const initializeMLService = async () => {
+    if (!user?.id) {
+      console.log('⚠️ No user available for ML initialization');
+      return;
+    }
+
     try {
+      // First set the current user for the ML service
+      await mlService.setCurrentUser(user.id);
+      console.log('✅ ML Service user set:', user.id);
+      
+      // Then initialize the service
       const result = await mlService.initialize();
       if (result.success) {
         console.log('✅ ML Service initialized in ControlsTab');
+      } else {
+        console.log('⚠️ ML Service initialization failed:', result.error);
       }
     } catch (error) {
       console.error('ML initialization error:', error);
     }
   };
 
-  // Update ML when appliances change
+  // Update ML when appliances change - FIXED
   useEffect(() => {
-    if (appliances.length > 0) {
+    if (appliances.length > 0 && user?.id) {
       mlService.updateAppliances(appliances);
       updateMLRecommendations();
     }
-  }, [appliances]);
+  }, [appliances, user?.id]);
 
   const updateMLRecommendations = async () => {
+    if (!user?.id) return;
+    
     try {
       const recs = mlService.getRecommendations(appliances);
       setMLRecommendations(recs.slice(0, 3)); // Show top 3
@@ -207,7 +223,7 @@ export default function ControlsTab() {
     };
   };
 
-  // Simple toggle with ML tracking
+  // Simple toggle with ML tracking - FIXED VERSION
   const toggleAppliance = async (applianceId, currentStatus) => {
     const newStatus = currentStatus === 'on' ? 'off' : 'on';
     
@@ -215,16 +231,18 @@ export default function ControlsTab() {
     Vibration.vibrate(50);
     
     try {
-      // Record user action for ML learning
-      await mlService.recordUserAction(
-        applianceId, 
-        newStatus === 'on' ? 'toggle_on' : 'toggle_off',
-        {
-          hour: new Date().getHours(),
-          dayOfWeek: new Date().getDay(),
-          manual: true,
-        }
-      );
+      // Record user action for ML learning - only if user is set
+      if (user?.id) {
+        await mlService.recordUserAction(
+          applianceId, 
+          newStatus === 'on' ? 'toggle_on' : 'toggle_off',
+          {
+            hour: new Date().getHours(),
+            dayOfWeek: new Date().getDay(),
+            manual: true,
+          }
+        );
+      }
 
       // Update Supabase
       const { error } = await supabase
@@ -241,8 +259,10 @@ export default function ControlsTab() {
       setAppliances(updatedAppliances);
       calculateStats(updatedAppliances);
       
-      // Update ML recommendations after toggle
-      await updateMLRecommendations();
+      // Update ML recommendations after toggle - only if user is set
+      if (user?.id) {
+        await updateMLRecommendations();
+      }
       
       Vibration.vibrate(100);
         
@@ -640,26 +660,33 @@ export default function ControlsTab() {
     );
   };
 
-  // Smart automation suggestions
+  // Smart automation suggestions - FIXED VERSION
   const renderSmartAutomation = (deviceId) => {
-    const schedule = mlService.getSmartSchedule(deviceId, 1);
+    if (!user?.id) return null;
     
-    if (!schedule.success || schedule.recommendedSlots.length === 0) return null;
+    try {
+      const schedule = mlService.getSmartSchedule(deviceId, 1);
+      
+      if (!schedule.success || schedule.recommendedSlots.length === 0) return null;
 
-    return (
-      <View style={styles.smartAutomationCard}>
-        <View style={styles.smartAutomationHeader}>
-          <MaterialIcons name="schedule" size={16} color="#8b5cf6" />
-          <Text style={styles.smartAutomationTitle}>Smart Schedule</Text>
+      return (
+        <View style={styles.smartAutomationCard}>
+          <View style={styles.smartAutomationHeader}>
+            <MaterialIcons name="schedule" size={16} color="#8b5cf6" />
+            <Text style={styles.smartAutomationTitle}>Smart Schedule</Text>
+          </View>
+          <Text style={styles.smartAutomationText}>
+            Best time: {schedule.recommendedSlots[0].timeLabel} ({schedule.recommendedSlots[0].savingsPercent}% savings)
+          </Text>
         </View>
-        <Text style={styles.smartAutomationText}>
-          Best time: {schedule.recommendedSlots[0].timeLabel} ({schedule.recommendedSlots[0].savingsPercent}% savings)
-        </Text>
-      </View>
-    );
+      );
+    } catch (error) {
+      console.error('Error getting smart schedule:', error);
+      return null;
+    }
   };
 
-  // Device card rendering
+  // Device card rendering - FIXED ML prediction section
   const renderDeviceCard = ({ item, index }) => {
     if (!item || !item.id || !item.name) {
       return (
@@ -675,12 +702,22 @@ export default function ControlsTab() {
       const isFavorite = favorites.includes(item.id);
       const currentPower = item.normal_usage || 0;
 
-      // Get ML prediction for this device
-      const allPredictions = mlService.getPredictions([item], 1);
-      const prediction = allPredictions.success ? 
-        allPredictions.predictions.find(p => p.deviceId === item.id) : 
-        { success: false }
-      const hasPrediction = prediction.success && prediction.confidence > 0.6;
+      // Get ML prediction for this device - FIXED VERSION
+      let hasPrediction = false;
+      let prediction = { success: false };
+      
+      if (user?.id) {
+        try {
+          const allPredictions = mlService.getPredictions([item], 1);
+          prediction = allPredictions.success ? 
+            allPredictions.predictions.find(p => p.deviceId === item.id) : 
+            { success: false };
+          hasPrediction = prediction.success && prediction.confidence > 0.6;
+        } catch (error) {
+          console.error('Error getting ML predictions:', error);
+          hasPrediction = false;
+        }
+      }
 
       if (viewMode === 'list') {
         return (
@@ -703,6 +740,13 @@ export default function ControlsTab() {
                   <Text style={styles.deviceListName}>{item.name}</Text>
                   <Text style={styles.deviceListRoom}>{item.room}</Text>
                   <Text style={styles.deviceListUsage}>{currentPower}W • {item.status}</Text>
+                  
+                  {/* Energy insight inline with usage info */}
+                  <View style={styles.deviceListEnergyContainer}>
+                    <View style={[styles.deviceListEnergyBadge, { backgroundColor: energyInsight.color }]}>
+                      <Text style={styles.deviceListEnergyText}>{energyInsight.level}</Text>
+                    </View>
+                  </View>
                   
                   {/* ML Prediction Badge */}
                   {hasPrediction && item.status === 'off' && prediction.prediction.willBeActive && (
@@ -756,7 +800,7 @@ export default function ControlsTab() {
         );
       }
 
-      // Grid View
+      // Grid View - UPDATED VERSION with centered power usage
       return (
         <TouchableOpacity 
           style={styles.deviceCard}
@@ -788,6 +832,18 @@ export default function ControlsTab() {
           <Text style={styles.deviceCardName}>{item.name}</Text>
           <Text style={styles.deviceCardRoom}>{item.room}</Text>
           
+          {/* Centered Power Usage */}
+          <View style={styles.deviceCardCenterSection}>
+            <Text style={styles.deviceCardUsageCentered}>{currentPower}W</Text>
+            
+            {/* Energy insight badge centered below power usage */}
+            <View style={styles.deviceCardEnergyContainer}>
+              <View style={[styles.deviceCardEnergyBadge, { backgroundColor: energyInsight.color }]}>
+                <Text style={styles.deviceCardEnergyText}>{energyInsight.level}</Text>
+              </View>
+            </View>
+          </View>
+          
           {/* ML Prediction for grid view */}
           {hasPrediction && (
             <View style={styles.mlPredictionChip}>
@@ -811,13 +867,6 @@ export default function ControlsTab() {
                 </Text>
               </View>
             )}
-            
-            <Text style={styles.deviceCardUsage}>{currentPower}W</Text>
-          </View>
-          
-          {/* Energy insight badge */}
-          <View style={[styles.energyBadge, { backgroundColor: energyInsight.color }]}>
-            <Text style={styles.energyBadgeText}>{energyInsight.level}</Text>
           </View>
           
           <TouchableOpacity 
